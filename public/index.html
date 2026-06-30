@@ -23,6 +23,7 @@
       <nav class="flex gap-1 text-sm">
         <a data-role="jordan" class="role-link px-3 py-1.5 rounded hover:bg-slate-100">Jordan · reviewer</a>
         <a data-role="sam" class="role-link px-3 py-1.5 rounded hover:bg-slate-100">Sam · operator</a>
+        <a data-role="operator" class="role-link px-3 py-1.5 rounded hover:bg-slate-100">Operator · publisher</a>
         <a data-role="sponsor" class="role-link px-3 py-1.5 rounded hover:bg-slate-100">Sponsor · read-only</a>
       </nav>
       <div class="text-xs text-slate-500" id="status-pill">—</div>
@@ -253,6 +254,45 @@
             <tbody id="audit-tbody"></tbody>
           </table>
         </div>
+      </div>
+    </section>
+
+    <!-- OPERATOR (seller-side creative review) -->
+    <section data-view="operator" class="hidden space-y-6">
+      <div>
+        <h1 class="text-xl font-semibold">Publisher operator</h1>
+        <p class="text-sm text-slate-500">Review creatives submitted to the seller. Approve to unlock <code class="font-mono">/live/result-slot</code> serving.</p>
+      </div>
+
+      <div class="bg-white p-5 rounded border border-slate-200 space-y-4">
+        <div class="flex items-center gap-3 text-sm">
+          <label>
+            <span class="text-slate-600 mr-1">Status</span>
+            <select id="operator-status" class="border border-slate-300 rounded px-2 py-1">
+              <option value="pending_review" selected>pending_review</option>
+              <option value="approved">approved</option>
+              <option value="rejected">rejected</option>
+              <option value="">all</option>
+            </select>
+          </label>
+          <button id="operator-reload" class="px-3 py-1.5 rounded border border-slate-300 text-sm hover:bg-slate-50">Reload</button>
+          <span class="text-xs text-slate-500" id="operator-status-line">—</span>
+        </div>
+        <table class="min-w-full text-sm">
+          <thead class="text-xs uppercase text-slate-500 border-b border-slate-200">
+            <tr>
+              <th class="text-left px-2 py-2">Preview</th>
+              <th class="text-left px-2 py-2">Creative</th>
+              <th class="text-left px-2 py-2">Format</th>
+              <th class="text-left px-2 py-2">Status</th>
+              <th class="text-left px-2 py-2">Submitted</th>
+              <th class="text-left px-2 py-2">Action</th>
+            </tr>
+          </thead>
+          <tbody id="operator-tbody">
+            <tr><td colspan="6" class="px-2 py-3 text-slate-400">Click Reload to fetch.</td></tr>
+          </tbody>
+        </table>
       </div>
     </section>
 

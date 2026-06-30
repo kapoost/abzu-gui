@@ -668,6 +668,87 @@ async function loadSponsor(planId) {
 
 /* BOOT --------------------------------------------------------------- */
 
+function pickUrl(v) {
+  if (typeof v === "string") return v;
+  if (v && typeof v === "object" && typeof v.url === "string") return v.url;
+  return null;
+}
+
+async function loadOperatorCreatives() {
+  const statusSel = $("#operator-status");
+  const tbody = $("#operator-tbody");
+  const line = $("#operator-status-line");
+  const status = statusSel.value;
+  const params = new URLSearchParams();
+  if (status) params.set("status", status);
+  params.set("limit", "50");
+  line.textContent = "loading…";
+  const r = await abzu(`/seller/creatives?${params}`);
+  if (!r.ok) {
+    line.textContent = `error · HTTP ${r.status}`;
+    tbody.innerHTML = `<tr><td colspan="6" class="px-2 py-3 text-rose-700">${esc(r.body?.error ?? "fetch failed")}</td></tr>`;
+    return;
+  }
+  const rows = r.body?.creatives ?? [];
+  line.textContent = `${rows.length} row${rows.length === 1 ? "" : "s"} · ${new Date().toLocaleTimeString()}`;
+  if (rows.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="6" class="px-2 py-3 text-slate-400">No creatives in this status.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = rows.map((row) => {
+    const img = pickUrl(row.assets?.image);
+    const thumb = img
+      ? `<img src="${esc(img)}" alt="" class="w-12 h-9 object-contain bg-white border border-slate-200" onerror="this.style.display='none';">`
+      : '<span class="text-slate-300 text-xs">—</span>';
+    const fmt = row.format_id?.id ?? "—";
+    const statusColor = row.status === "approved" ? "text-emerald-700"
+      : row.status === "rejected" ? "text-rose-700"
+      : row.status === "pending_review" ? "text-amber-700" : "text-slate-600";
+    const submitted = new Date(row.submitted_at).toLocaleString();
+    const action = row.status === "pending_review"
+      ? `<button class="op-approve px-2 py-1 rounded bg-emerald-600 text-white text-xs hover:bg-emerald-500" data-id="${esc(row.creative_id)}">Approve</button>
+         <button class="op-reject px-2 py-1 rounded bg-transparent text-rose-700 border border-rose-300 text-xs hover:bg-rose-50 ml-1" data-id="${esc(row.creative_id)}">Reject</button>`
+      : `<span class="text-slate-400 text-xs">${row.reviewed_at ? new Date(row.reviewed_at).toLocaleString() : "—"}</span>`;
+    return `<tr class="border-b border-slate-100 align-middle">
+      <td class="px-2 py-2">${thumb}</td>
+      <td class="px-2 py-2 font-mono text-xs">${esc(row.creative_id)}</td>
+      <td class="px-2 py-2 text-xs">${esc(fmt)}</td>
+      <td class="px-2 py-2 text-xs font-semibold ${statusColor}">${esc(row.status)}</td>
+      <td class="px-2 py-2 text-xs text-slate-500">${esc(submitted)}</td>
+      <td class="px-2 py-2">${action}</td>
+    </tr>`;
+  }).join("");
+  for (const btn of tbody.querySelectorAll(".op-approve")) {
+    btn.addEventListener("click", () => reviewOperatorCreative(btn.dataset.id, "approve"));
+  }
+  for (const btn of tbody.querySelectorAll(".op-reject")) {
+    btn.addEventListener("click", () => reviewOperatorCreative(btn.dataset.id, "reject"));
+  }
+}
+
+async function reviewOperatorCreative(id, action) {
+  let note = null;
+  if (action === "reject") {
+    note = window.prompt("Reject note (required):");
+    if (!note) return;
+  }
+  const r = await abzu(`/seller/creatives/${encodeURIComponent(id)}/${action}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(note ? { note } : {}),
+  });
+  if (!r.ok) {
+    alert(`${action} failed: HTTP ${r.status} ${r.body?.error ?? ""}`);
+    return;
+  }
+  loadOperatorCreatives();
+}
+
+function bindOperator() {
+  $("#operator-reload")?.addEventListener("click", loadOperatorCreatives);
+  $("#operator-status")?.addEventListener("change", loadOperatorCreatives);
+}
+
 function boot() {
   const url = new URL(window.location.href);
   const role = url.searchParams.get("role") || "sam";
@@ -677,6 +758,7 @@ function boot() {
   activateRole(role);
   bindSam();
   bindJordan();
+  bindOperator();
   bindSponsor();
   refreshKnownPlans();
   setInterval(refreshKnownPlans, 15000);

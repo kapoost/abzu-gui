@@ -19,10 +19,9 @@ function activateRole(role) {
 
 function setStatus(text, ok = true) {
   const el = $("#status-pill");
+  if (!el) return;
   el.textContent = text;
-  el.className = `text-xs px-2 py-0.5 rounded ${
-    ok ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"
-  }`;
+  el.className = `pill ${ok ? "pill-ok" : "pill-err"}`;
 }
 
 async function probeAbzu() {
@@ -36,15 +35,58 @@ async function probeAbzu() {
   }
 }
 
+const DEMO_STATE_KEY = "abzu.demoState";
 const LAST_PLAN_KEY = "abzu.lastPlanId";
 
+/* Shared demo state — the linear thread through Jordan → Sam → Operator → Sponsor.
+ * Each tab's success action writes to it, and every tab's breadcrumb + auto-fill
+ * reads from it. Keys never expire; "Reset demo" clears them. */
+function getDemoState() {
+  try {
+    const raw = localStorage.getItem(DEMO_STATE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function patchDemoState(patch) {
+  const next = { ...getDemoState(), ...patch, updated_at: new Date().toISOString() };
+  try { localStorage.setItem(DEMO_STATE_KEY, JSON.stringify(next)); } catch {}
+  updateBreadcrumb();
+  return next;
+}
+
+function updateBreadcrumb() {
+  const state = getDemoState();
+  for (const el of $$(".breadcrumb")) {
+    const steps = el.querySelectorAll(".step");
+    if (!steps.length) return;
+    const hasPlan = !!state.plan_id;
+    const hasBuy = !!state.media_buy_id;
+    const hasCreative = !!state.creative_id;
+    const hasApproved = !!state.creative_approved;
+    steps.forEach((step) => {
+      const key = step.dataset.step;
+      step.classList.remove("done", "active");
+      if (key === "plan" && hasPlan) step.classList.add("done");
+      else if (key === "buy" && hasBuy) step.classList.add("done");
+      else if (key === "creative" && hasCreative) step.classList.add(hasApproved ? "done" : "active");
+      else if (key === "audit" && hasApproved) step.classList.add("done");
+    });
+  }
+}
+
 function getLastPlanId() {
+  const state = getDemoState();
+  if (state.plan_id) return state.plan_id;
   try { return localStorage.getItem(LAST_PLAN_KEY) || ""; } catch { return ""; }
 }
 
 function setLastPlanId(planId) {
   if (!planId) return;
   try { localStorage.setItem(LAST_PLAN_KEY, planId); } catch {}
+  patchDemoState({ plan_id: planId });
   for (const input of $$(".plan-input")) {
     if (!input.value) input.value = planId;
   }
@@ -168,9 +210,9 @@ function fmtJson(value) {
 function fmtIssues(issues) {
   if (!Array.isArray(issues) || issues.length === 0) return "";
   const rows = issues
-    .map((i) => `<li><code class="font-mono text-xs bg-rose-100 px-1 rounded mr-2">${esc(i.path || "·")}</code><span>${esc(i.message)}</span></li>`)
+    .map((i) => `<li class="flex items-start gap-2"><code class="font-mono text-xs bg-rose-900/30 text-rose-300 px-1.5 py-0.5 rounded">${esc(i.path || "·")}</code><span>${esc(i.message)}</span></li>`)
     .join("");
-  return `<ul class="space-y-1 text-sm text-rose-900">${rows}</ul>`;
+  return `<ul class="space-y-1 text-sm text-rose-100/90">${rows}</ul>`;
 }
 
 function renderError(target, status, body) {
@@ -178,12 +220,12 @@ function renderError(target, status, body) {
   const issues = body?.issues;
   const issuesEl = Array.isArray(issues) ? fmtIssues(issues) : "";
   target.innerHTML = `
-    <div class="border border-rose-200 bg-rose-50 rounded p-3 space-y-2">
+    <div class="rounded-md border border-rose-900/60 bg-rose-950/30 p-3 space-y-2">
       <div class="flex items-center justify-between">
-        <div class="text-sm font-semibold text-rose-800">HTTP ${status} · ${esc(code)}</div>
-        <button class="text-xs text-rose-700 hover:underline" data-toggle-raw>raw</button>
+        <div class="text-sm font-semibold text-rose-300">HTTP ${status} · ${esc(code)}</div>
+        <button class="text-xs text-rose-400 hover:text-rose-200 hover:underline" data-toggle-raw>raw</button>
       </div>
-      <div class="text-sm text-rose-900">${esc(body?.error ?? "(no message)")}</div>
+      <div class="text-sm text-rose-100/90">${esc(body?.error ?? "(no message)")}</div>
       ${issuesEl}
       <details class="hidden" data-raw>${fmtJson(body)}</details>
     </div>
@@ -219,12 +261,21 @@ function bindSam() {
         .filter(Boolean),
       top_n: Number(fd.get("top_n") || 3),
     };
+    const submitBtn = $("#brief-submit");
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Querying sellers…";
+    showDiscoveryProgress();
+    const startedAt = Date.now();
     const r = await abzu("/planning/brief", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });
-    renderDiagnostics(r);
+    const elapsedMs = Date.now() - startedAt;
+    hideDiscoveryProgress();
+    submitBtn.disabled = false;
+    submitBtn.textContent = "Discover products";
+    renderDiagnostics(r, elapsedMs);
     if (r.ok) renderProposals(r.body);
   });
 
@@ -249,14 +300,19 @@ function bindSam() {
       flight: { start: fd.get("buy_start"), end: fd.get("buy_end") },
       accept_conditions: fd.get("accept_conditions") === "on",
     };
+    const buyBtn = $("#buy-submit");
+    if (buyBtn) { buyBtn.disabled = true; buyBtn.textContent = "Executing…"; }
     const r = await abzu("/execution/buy", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });
+    if (buyBtn) { buyBtn.disabled = false; buyBtn.textContent = "Execute buy"; }
     if (r.ok) {
       setLastPlanId(String(fd.get("plan_id") ?? ""));
       refreshKnownPlans();
+      const mb = r.body?.media_buy?.media_buy_id;
+      if (mb) patchDemoState({ media_buy_id: mb });
     }
     renderBuyResult(r);
 
@@ -293,12 +349,42 @@ function bindSam() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify(syncPayload),
       });
+      if (cs.ok) {
+        const cid = cs.body?.creatives?.[0]?.creative_id;
+        if (cid) patchDemoState({ creative_id: cid });
+      }
       renderCreativeSyncResult(cs);
     }
   });
 }
 
-function renderDiagnostics(r) {
+const KNOWN_SELLER_PLACEHOLDERS = [
+  "purrsonality-seller", "gumgum-sales-agent", "loopme-sales-agent",
+  "bidmachine-seller-agent", "equativ", "inmobi-exchange",
+  "triton-digital", "weather-company-scope3", "ozone-project",
+  "adzymic-sph", "mamamia", "impaired-test-seller",
+];
+
+function showDiscoveryProgress() {
+  $("#brief-diagnostics")?.classList.add("hidden");
+  $("#proposals")?.classList.add("hidden");
+  const wrap = $("#discovery-progress");
+  const grid = $("#discovery-progress-grid");
+  if (!wrap || !grid) return;
+  wrap.classList.remove("hidden");
+  grid.innerHTML = KNOWN_SELLER_PLACEHOLDERS.map((id, i) => `
+    <div class="seller-card flex items-center gap-2 rounded-md border border-zinc-700 bg-zinc-900/40 px-3 py-2 text-xs" style="--i: ${i}">
+      <span class="status-pending"></span>
+      <span class="font-mono text-zinc-400 truncate">${esc(id)}</span>
+    </div>
+  `).join("");
+}
+
+function hideDiscoveryProgress() {
+  $("#discovery-progress")?.classList.add("hidden");
+}
+
+function renderDiagnostics(r, elapsedMs) {
   const el = $("#brief-diagnostics");
   el.classList.remove("hidden");
   if (!r.ok) {
@@ -306,15 +392,69 @@ function renderDiagnostics(r) {
     return;
   }
   const d = r.body?.diagnostics || {};
-  el.classList.remove("hidden");
+  const proposals = r.body?.proposals || [];
+  const sellers = Array.isArray(d.sellers) ? d.sellers : [];
   el.innerHTML = `
-    <div class="flex gap-6 text-slate-600">
-      <span>Queried: <b class="text-slate-900">${d.sellers_queried ?? "?"}</b></span>
-      <span>Responded: <b class="text-slate-900">${d.sellers_responded ?? "?"}</b></span>
-      <span>Partial: <b class="text-slate-900">${d.partial ? "yes" : "no"}</b></span>
-      <span>Proposals: <b class="text-slate-900">${r.body.proposals?.length ?? 0}</b></span>
+    <div class="flex items-center flex-wrap gap-2 mb-4">
+      <span class="pill pill-info">Queried · ${d.sellers_queried ?? "?"}</span>
+      <span class="pill ${d.sellers_responded > 0 ? "pill-ok" : "pill-err"}">Responded · ${d.sellers_responded ?? "?"}</span>
+      <span class="pill ${d.partial ? "pill-warn" : "pill-ok"}">${d.partial ? "Partial" : "Complete"}</span>
+      <span class="pill pill-brand">Proposals · ${proposals.length}</span>
+      ${elapsedMs ? `<span class="pill pill-info">${(elapsedMs / 1000).toFixed(1)}s</span>` : ""}
     </div>
-    <details class="mt-3"><summary class="text-slate-500 cursor-pointer">Per-seller</summary>${fmtJson(d.sellers)}</details>
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2" id="seller-cards"></div>
+    <details class="mt-3 text-xs text-zinc-500">
+      <summary class="cursor-pointer hover:text-zinc-300">Raw diagnostics</summary>
+      ${fmtJson(d)}
+    </details>
+  `;
+  const grid = $("#seller-cards");
+  if (grid) {
+    grid.innerHTML = sellers.map((s, i) => sellerCardHtml(s, i)).join("");
+  }
+}
+
+function sellerCardHtml(s, i) {
+  const isOk = s.ok === true;
+  const errStr = String(s.error || "").toLowerCase();
+  const isTimeout = errStr.includes("timeout") || errStr.includes("capabilities_unreachable");
+  const isValidation = errStr.includes("validation_failed") || (Array.isArray(s.validation_issues) && s.validation_issues.length > 0);
+  let statusClass = "status-done";
+  let statusLabel = "ok";
+  let statusColor = "text-emerald-400";
+  if (!isOk) {
+    if (isTimeout) {
+      statusClass = "status-timeout";
+      statusLabel = "timeout";
+      statusColor = "text-amber-400";
+    } else if (isValidation) {
+      statusClass = "status-error";
+      statusLabel = "incompatible";
+      statusColor = "text-rose-400";
+    } else {
+      statusClass = "status-error";
+      statusLabel = "error";
+      statusColor = "text-rose-400";
+    }
+  }
+  const productsLine = isOk && (s.products_returned ?? 0) > 0
+    ? `<div class="text-xs text-zinc-400 mt-1">${s.products_returned} product${s.products_returned === 1 ? "" : "s"} returned</div>`
+    : "";
+  const errLine = !isOk && s.error
+    ? `<div class="text-xs text-zinc-500 mt-1 truncate" title="${esc(s.error)}">${esc(s.error.slice(0, 60))}${s.error.length > 60 ? "…" : ""}</div>`
+    : "";
+  return `
+    <div class="seller-card rounded-md border border-zinc-700 bg-zinc-900/50 px-3 py-2.5" style="--i: ${i}">
+      <div class="flex items-center justify-between gap-2">
+        <div class="flex items-center min-w-0 flex-1">
+          <span class="${statusClass}"></span>
+          <span class="font-mono text-xs text-zinc-200 truncate">${esc(s.seller_id)}</span>
+        </div>
+        <span class="text-xs font-semibold ${statusColor} uppercase tracking-wider">${statusLabel}</span>
+      </div>
+      ${productsLine}
+      ${errLine}
+    </div>
   `;
 }
 
@@ -325,23 +465,23 @@ function renderProposals(body) {
   const proposals = body.proposals || [];
   if (proposals.length === 0) {
     wrap.classList.remove("hidden");
-    tbody.innerHTML = `<tr><td colspan="6" class="px-3 py-3 text-slate-500">No proposals.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6" class="px-3 py-3 text-zinc-500">No proposals.</td></tr>`;
     return;
   }
   proposals.forEach((p, i) => {
     const tr = document.createElement("tr");
-    tr.className = "border-t border-slate-100 hover:bg-slate-50";
+    tr.className = "border-t border-zinc-800 hover:bg-zinc-800/30";
     tr.innerHTML = `
-      <td class="px-3 py-2 text-slate-500">${i + 1}</td>
-      <td class="px-3 py-2">${esc(p.seller_id)}</td>
+      <td class="px-3 py-2 text-zinc-500">${i + 1}</td>
+      <td class="px-3 py-2 text-zinc-200">${esc(p.seller_id)}</td>
       <td class="px-3 py-2">
-        <div>${esc(p.product?.name ?? p.product?.product_id)}</div>
-        <div class="text-xs text-slate-500">${esc(p.product?.product_id)}</div>
+        <div class="text-zinc-100">${esc(p.product?.name ?? p.product?.product_id)}</div>
+        <div class="text-xs text-zinc-500 font-mono">${esc(p.product?.product_id)}</div>
       </td>
-      <td class="px-3 py-2 text-slate-600">${esc(p.product?.delivery_type ?? "—")}</td>
+      <td class="px-3 py-2 text-zinc-300">${esc(p.product?.delivery_type ?? "—")}</td>
       <td class="px-3 py-2">
-        <span class="font-medium">${p.score.toFixed(2)}</span>
-        <span class="text-xs text-slate-400">
+        <span class="font-medium text-zinc-100">${p.score.toFixed(2)}</span>
+        <span class="text-xs text-zinc-500">
           f=${p.breakdown.format_match}
           c=${p.breakdown.channel_match}
           d=${p.breakdown.delivery_match}
@@ -403,11 +543,11 @@ function renderBuyResult(r) {
       <span class="verdict-${esc(verdict)}">verdict: ${esc(verdict)}</span>
     </div>
     <div class="grid grid-cols-3 gap-3 text-sm">
-      <div><div class="text-xs text-slate-500">media_buy_id</div><div class="font-mono">${esc(mb?.media_buy_id ?? "—")}</div></div>
-      <div><div class="text-xs text-slate-500">status</div><div>${esc(mb?.media_buy_status ?? mb?.status ?? "—")}</div></div>
-      <div><div class="text-xs text-slate-500">outcome</div><div class="outcome-${esc(r.body?.outcome?.outcome_state)}">${esc(r.body?.outcome?.outcome_state ?? "—")} · ${r.body?.outcome?.committed_budget ?? "—"} ${esc(r.body?.buy_intake?.currency ?? "")}</div></div>
+      <div><div class="text-xs text-zinc-500">media_buy_id</div><div class="font-mono">${esc(mb?.media_buy_id ?? "—")}</div></div>
+      <div><div class="text-xs text-zinc-500">status</div><div>${esc(mb?.media_buy_status ?? mb?.status ?? "—")}</div></div>
+      <div><div class="text-xs text-zinc-500">outcome</div><div class="outcome-${esc(r.body?.outcome?.outcome_state)}">${esc(r.body?.outcome?.outcome_state ?? "—")} · ${r.body?.outcome?.committed_budget ?? "—"} ${esc(r.body?.buy_intake?.currency ?? "")}</div></div>
     </div>
-    <details><summary class="text-slate-500 cursor-pointer text-sm">Full response</summary>${fmtJson(r.body)}</details>
+    <details><summary class="text-zinc-500 cursor-pointer text-sm">Full response</summary>${fmtJson(r.body)}</details>
   `;
 
   if (mb?.media_buy_id && r.body?.governance_check?.governance_context) {
@@ -441,14 +581,14 @@ function renderCreativeSyncResult(r) {
   const rows = Array.isArray(r.body?.creatives) ? r.body.creatives : [];
   el.innerHTML = `
     <h3 class="text-base font-semibold">Creative synced to seller</h3>
-    <p class="text-xs text-slate-500">Status <code class="font-mono">pending_review</code> means seller operator must approve in admin UI before /live/result-slot serves it.</p>
-    <table class="min-w-full text-sm border border-slate-200 rounded">
-      <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+    <p class="text-xs text-zinc-500">Status <code class="font-mono">pending_review</code> means seller operator must approve in admin UI before /live/result-slot serves it.</p>
+    <table class="min-w-full text-sm border border-zinc-800 rounded">
+      <thead class="bg-zinc-800/30 text-xs uppercase text-zinc-500">
         <tr><th class="text-left px-3 py-2">creative_id</th><th class="text-left px-3 py-2">action</th><th class="text-left px-3 py-2">status</th></tr>
       </thead>
-      <tbody>${rows.map((c) => `<tr class="border-t border-slate-100"><td class="px-3 py-2 font-mono text-xs">${esc(c.creative_id)}</td><td class="px-3 py-2">${esc(c.action ?? "—")}</td><td class="px-3 py-2">${esc(c.status ?? "—")}</td></tr>`).join("")}</tbody>
+      <tbody>${rows.map((c) => `<tr class="border-t border-zinc-800"><td class="px-3 py-2 font-mono text-xs">${esc(c.creative_id)}</td><td class="px-3 py-2">${esc(c.action ?? "—")}</td><td class="px-3 py-2">${esc(c.status ?? "—")}</td></tr>`).join("")}</tbody>
     </table>
-    <details><summary class="text-slate-500 cursor-pointer text-sm">Full response</summary>${fmtJson(r.body)}</details>
+    <details><summary class="text-zinc-500 cursor-pointer text-sm">Full response</summary>${fmtJson(r.body)}</details>
   `;
 }
 
@@ -456,10 +596,10 @@ function showDeliveryPanel(ctx) {
   const panel = $("#delivery-panel");
   panel.classList.remove("hidden");
   $("#delivery-snapshot").innerHTML = `
-    <div><div class="text-xs text-slate-500">seller</div><div class="font-mono text-xs">${esc(ctx.seller_id)}</div></div>
-    <div><div class="text-xs text-slate-500">media_buy_id</div><div class="font-mono text-xs">${esc(ctx.media_buy_id)}</div></div>
-    <div><div class="text-xs text-slate-500">plan</div><div class="font-mono text-xs">${esc(ctx.plan_id)}</div></div>
-    <div><div class="text-xs text-slate-500">last pull</div><div class="text-slate-500">never</div></div>
+    <div><div class="text-xs text-zinc-500">seller</div><div class="font-mono text-xs">${esc(ctx.seller_id)}</div></div>
+    <div><div class="text-xs text-zinc-500">media_buy_id</div><div class="font-mono text-xs">${esc(ctx.media_buy_id)}</div></div>
+    <div><div class="text-xs text-zinc-500">plan</div><div class="font-mono text-xs">${esc(ctx.plan_id)}</div></div>
+    <div><div class="text-xs text-zinc-500">last pull</div><div class="text-zinc-500">never</div></div>
   `;
   $("#delivery-outcome").innerHTML = "";
   $("#delivery-error").classList.add("hidden");
@@ -482,10 +622,10 @@ async function pullDelivery() {
   const buy = r.body?.delivery?.media_buys?.[0] || {};
   const now = new Date().toISOString().slice(11, 19);
   $("#delivery-snapshot").innerHTML = `
-    <div><div class="text-xs text-slate-500">impressions</div><div class="font-semibold">${buy.impressions ?? "0"}</div></div>
-    <div><div class="text-xs text-slate-500">spend</div><div class="font-semibold">${buy.spend ?? "0"}</div></div>
-    <div><div class="text-xs text-slate-500">status</div><div>${esc(buy.status ?? buy.media_buy_status ?? "—")}</div></div>
-    <div><div class="text-xs text-slate-500">last pull</div><div class="text-slate-500">${now} (UTC)</div></div>
+    <div><div class="text-xs text-zinc-500">impressions</div><div class="font-semibold">${buy.impressions ?? "0"}</div></div>
+    <div><div class="text-xs text-zinc-500">spend</div><div class="font-semibold">${buy.spend ?? "0"}</div></div>
+    <div><div class="text-xs text-zinc-500">status</div><div>${esc(buy.status ?? buy.media_buy_status ?? "—")}</div></div>
+    <div><div class="text-xs text-zinc-500">last pull</div><div class="text-zinc-500">${now} (UTC)</div></div>
   `;
   $("#delivery-outcome").innerHTML = `
     <span class="outcome-${esc(r.body?.outcome?.outcome_state)}">governance outcome: ${esc(r.body?.outcome?.outcome_state ?? "—")}</span>
@@ -514,18 +654,21 @@ function bindJordan() {
         },
       ],
     };
+    const planBtn = $("#plan-submit");
+    if (planBtn) { planBtn.disabled = true; planBtn.textContent = "Registering…"; }
     const r = await abzu("/governance/plans", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });
+    if (planBtn) { planBtn.disabled = false; planBtn.textContent = "Register plan"; }
     const el = $("#plan-result");
     el.classList.remove("hidden");
     if (r.ok) {
       el.innerHTML = `
-        <div class="border border-emerald-200 bg-emerald-50 rounded p-3 space-y-1">
-          <div class="text-sm font-semibold text-emerald-800">Plan registered</div>
-          <div class="text-xs text-emerald-700">plan_id = <code class="font-mono">${esc(fd.get("plan_id"))}</code>, status = active</div>
+        <div class="rounded-md border border-emerald-900/60 bg-emerald-950/30 p-3 space-y-1">
+          <div class="text-sm font-semibold text-emerald-300">Plan registered</div>
+          <div class="text-xs text-emerald-200/80">plan_id = <code class="font-mono">${esc(fd.get("plan_id"))}</code>, status = <span class="text-emerald-400">active</span></div>
         </div>
       `;
       const planId = String(fd.get("plan_id"));
@@ -551,11 +694,11 @@ async function loadAudit(planId) {
   }
   const plan = r.body?.plans?.[0];
   $("#audit-summary").innerHTML = `
-    <span>Plan <b class="text-slate-900">${esc(plan?.plan_id)}</b></span> ·
-    <span>Status <b class="text-slate-900">${esc(plan?.status)}</b></span> ·
-    <span>Authorized <b class="text-slate-900">${plan?.budget?.authorized ?? "—"}</b></span> ·
-    <span>Checks <b class="text-slate-900">${plan?.summary?.checks_performed ?? 0}</b></span> ·
-    <span>Outcomes <b class="text-slate-900">${plan?.summary?.outcomes_reported ?? 0}</b></span>
+    <span>Plan <b class="text-zinc-100">${esc(plan?.plan_id)}</b></span> ·
+    <span>Status <b class="text-zinc-100">${esc(plan?.status)}</b></span> ·
+    <span>Authorized <b class="text-zinc-100">${plan?.budget?.authorized ?? "—"}</b></span> ·
+    <span>Checks <b class="text-zinc-100">${plan?.summary?.checks_performed ?? 0}</b></span> ·
+    <span>Outcomes <b class="text-zinc-100">${plan?.summary?.outcomes_reported ?? 0}</b></span>
   `;
 
   const entries = plan?.entries || [];
@@ -565,7 +708,7 @@ async function loadAudit(planId) {
   tbody.innerHTML = "";
   entries.forEach((e) => {
     const tr = document.createElement("tr");
-    tr.className = "border-t border-slate-100";
+    tr.className = "border-t border-zinc-800";
     const tag = e.type === "check"
       ? `<span class="verdict-${esc(e.verdict)}">check · ${esc(e.verdict)}</span>`
       : `<span class="outcome-accepted">outcome · ${esc(e.outcome)}</span>`;
@@ -578,8 +721,8 @@ async function loadAudit(planId) {
       <td class="px-3 py-2 text-xs font-mono">${esc(e.timestamp)}</td>
       <td class="px-3 py-2">${esc(e.type)}</td>
       <td class="px-3 py-2">${tag}</td>
-      <td class="px-3 py-2 text-slate-600">${esc(e.caller ?? "—")}</td>
-      <td class="px-3 py-2 text-xs text-slate-500">${detailParts.join(" · ") || esc(e.id)}</td>
+      <td class="px-3 py-2 text-zinc-400">${esc(e.caller ?? "—")}</td>
+      <td class="px-3 py-2 text-xs text-zinc-500">${detailParts.join(" · ") || esc(e.id)}</td>
     `;
     tbody.appendChild(tr);
   });
@@ -604,8 +747,8 @@ function renderConditionsQueue(planId, entries) {
       .map((f) => `
         <li class="text-sm">
           <span class="severity-${esc(f.severity)}">${esc(f.severity)}</span>
-          <code class="font-mono text-xs text-slate-600">${esc(f.policy_id ?? "—")}</code>
-          <span class="block text-slate-700 ml-1">${esc(f.explanation)}</span>
+          <code class="font-mono text-xs text-zinc-400">${esc(f.policy_id ?? "—")}</code>
+          <span class="block text-zinc-300 ml-1">${esc(f.explanation)}</span>
         </li>
       `).join("");
     const samLink = `?role=sam`;
@@ -654,12 +797,12 @@ async function loadSponsor(planId) {
   timeline.innerHTML = "";
   (plan?.entries || []).forEach((e) => {
     const li = document.createElement("li");
-    li.className = "flex items-start gap-3 border-l-2 border-slate-200 pl-3";
+    li.className = "flex items-start gap-3 border-l-2 border-zinc-800 pl-3";
     const label = e.type === "check"
       ? `<span class="verdict-${esc(e.verdict)}">check · ${esc(e.verdict)}</span>`
       : `<span class="outcome-accepted">outcome · ${esc(e.outcome)}</span>`;
     li.innerHTML = `
-      <div class="text-xs font-mono text-slate-500 w-44">${esc(e.timestamp)}</div>
+      <div class="text-xs font-mono text-zinc-500 w-44">${esc(e.timestamp)}</div>
       <div class="flex-1 text-sm">${label}</div>
     `;
     timeline.appendChild(li);
@@ -692,29 +835,29 @@ async function loadOperatorCreatives() {
   const rows = r.body?.creatives ?? [];
   line.textContent = `${rows.length} row${rows.length === 1 ? "" : "s"} · ${new Date().toLocaleTimeString()}`;
   if (rows.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="6" class="px-2 py-3 text-slate-400">No creatives in this status.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6" class="px-2 py-3 text-zinc-500">No creatives in this status.</td></tr>`;
     return;
   }
   tbody.innerHTML = rows.map((row) => {
     const img = pickUrl(row.assets?.image);
     const thumb = img
-      ? `<img src="${esc(img)}" alt="" class="w-12 h-9 object-contain bg-white border border-slate-200" onerror="this.style.display='none';">`
+      ? `<img src="${esc(img)}" alt="" class="w-12 h-9 object-contain bg-white border border-zinc-800" onerror="this.style.display='none';">`
       : '<span class="text-slate-300 text-xs">—</span>';
     const fmt = row.format_id?.id ?? "—";
     const statusColor = row.status === "approved" ? "text-emerald-700"
       : row.status === "rejected" ? "text-rose-700"
-      : row.status === "pending_review" ? "text-amber-700" : "text-slate-600";
+      : row.status === "pending_review" ? "text-amber-700" : "text-zinc-400";
     const submitted = new Date(row.submitted_at).toLocaleString();
     const action = row.status === "pending_review"
       ? `<button class="op-approve px-2 py-1 rounded bg-emerald-600 text-white text-xs hover:bg-emerald-500" data-id="${esc(row.creative_id)}">Approve</button>
          <button class="op-reject px-2 py-1 rounded bg-transparent text-rose-700 border border-rose-300 text-xs hover:bg-rose-50 ml-1" data-id="${esc(row.creative_id)}">Reject</button>`
-      : `<span class="text-slate-400 text-xs">${row.reviewed_at ? new Date(row.reviewed_at).toLocaleString() : "—"}</span>`;
-    return `<tr class="border-b border-slate-100 align-middle">
+      : `<span class="text-zinc-500 text-xs">${row.reviewed_at ? new Date(row.reviewed_at).toLocaleString() : "—"}</span>`;
+    return `<tr class="border-b border-zinc-800 align-middle">
       <td class="px-2 py-2">${thumb}</td>
       <td class="px-2 py-2 font-mono text-xs">${esc(row.creative_id)}</td>
       <td class="px-2 py-2 text-xs">${esc(fmt)}</td>
       <td class="px-2 py-2 text-xs font-semibold ${statusColor}">${esc(row.status)}</td>
-      <td class="px-2 py-2 text-xs text-slate-500">${esc(submitted)}</td>
+      <td class="px-2 py-2 text-xs text-zinc-500">${esc(submitted)}</td>
       <td class="px-2 py-2">${action}</td>
     </tr>`;
   }).join("");
@@ -741,6 +884,7 @@ async function reviewOperatorCreative(id, action) {
     alert(`${action} failed: HTTP ${r.status} ${r.body?.error ?? ""}`);
     return;
   }
+  if (action === "approve") patchDemoState({ creative_approved: true });
   loadOperatorCreatives();
 }
 
@@ -751,11 +895,45 @@ function bindOperator() {
 
 function boot() {
   const url = new URL(window.location.href);
-  const role = url.searchParams.get("role") || "sam";
+  const role = url.searchParams.get("role") || "jordan";
   for (const link of $$(".role-link")) {
     link.addEventListener("click", () => activateRole(link.dataset.role));
   }
+  $("#reset-demo")?.addEventListener("click", () => {
+    try { localStorage.clear(); } catch {}
+    window.location.href = "/?role=jordan";
+  });
   activateRole(role);
+  updateBreadcrumb();
+  // Auto-load operator queue when entering that tab so the user doesn't have
+  // to hunt for the Reload button after coming back from Sam's buy.
+  for (const link of $$(".role-link")) {
+    link.addEventListener("click", () => {
+      if (link.dataset.role === "operator") {
+        setTimeout(loadOperatorCreatives, 100);
+      }
+      if (link.dataset.role === "sponsor") {
+        const planId = getLastPlanId();
+        if (planId) {
+          const input = $("#sponsor-plan-id");
+          if (input && !input.value) input.value = planId;
+          setTimeout(() => {
+            const btn = $("#sponsor-load");
+            if (btn && typeof loadSponsor === "function") loadSponsor(planId);
+          }, 100);
+        }
+      }
+    });
+  }
+  if (role === "operator") setTimeout(loadOperatorCreatives, 100);
+  if (role === "sponsor") {
+    const planId = getLastPlanId();
+    if (planId) {
+      const input = $("#sponsor-plan-id");
+      if (input && !input.value) input.value = planId;
+      setTimeout(() => { if (typeof loadSponsor === "function") loadSponsor(planId); }, 100);
+    }
+  }
   bindSam();
   bindJordan();
   bindOperator();

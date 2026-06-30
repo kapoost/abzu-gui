@@ -220,12 +220,12 @@ function renderError(target, status, body) {
   const issues = body?.issues;
   const issuesEl = Array.isArray(issues) ? fmtIssues(issues) : "";
   target.innerHTML = `
-    <div class="rounded-md border border-rose-900/60 bg-rose-950/30 p-3 space-y-2">
+    <div class="alert-error space-y-2">
       <div class="flex items-center justify-between">
-        <div class="text-sm font-semibold text-rose-300">HTTP ${status} · ${esc(code)}</div>
-        <button class="text-xs text-rose-400 hover:text-rose-200 hover:underline" data-toggle-raw>raw</button>
+        <div class="alert-title">HTTP ${status} · ${esc(code)}</div>
+        <button class="text-xs text-rose-300 hover:text-rose-100 hover:underline" data-toggle-raw>raw</button>
       </div>
-      <div class="text-sm text-rose-100/90">${esc(body?.error ?? "(no message)")}</div>
+      <div class="alert-body">${esc(body?.error ?? "(no message)")}</div>
       ${issuesEl}
       <details class="hidden" data-raw>${fmtJson(body)}</details>
     </div>
@@ -666,9 +666,9 @@ function bindJordan() {
     el.classList.remove("hidden");
     if (r.ok) {
       el.innerHTML = `
-        <div class="rounded-md border border-emerald-900/60 bg-emerald-950/30 p-3 space-y-1">
-          <div class="text-sm font-semibold text-emerald-300">Plan registered</div>
-          <div class="text-xs text-emerald-200/80">plan_id = <code class="font-mono">${esc(fd.get("plan_id"))}</code>, status = <span class="text-emerald-400">active</span></div>
+        <div class="alert-success">
+          <div class="alert-title">✓ Plan registered</div>
+          <div class="alert-body">plan_id = <code class="font-mono">${esc(fd.get("plan_id"))}</code>, status = active</div>
         </div>
       `;
       const planId = String(fd.get("plan_id"));
@@ -893,7 +893,18 @@ function bindOperator() {
   $("#operator-status")?.addEventListener("change", loadOperatorCreatives);
 }
 
+function wakeUpSeller() {
+  // fire-and-forget healthz ping so the seller fly machine is hot by the
+  // time the user clicks Discover. cold start adds ~3s to the first brief
+  // otherwise — kills the live "agents respond in 5s" wow moment.
+  fetch("https://seller.purrsonality.rocketscience.pl/.well-known/healthz", {
+    mode: "no-cors",
+    cache: "no-store",
+  }).catch(() => {});
+}
+
 function boot() {
+  wakeUpSeller();
   const url = new URL(window.location.href);
   const role = url.searchParams.get("role") || "jordan";
   for (const link of $$(".role-link")) {

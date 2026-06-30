@@ -378,3 +378,41 @@ pre.json {
   transition: transform 120ms;
 }
 
+/* ── Result alert cards (Plan registered, Buy executed, Error) ───── */
+.alert-success {
+  border: 1px solid rgba(16, 185, 129, 0.4);
+  background: rgba(6, 78, 59, 0.45);
+  color: #d1fae5;
+  border-radius: 0.375rem;
+  padding: 0.75rem;
+}
+.alert-success .alert-title {
+  color: #6ee7b7;
+  font-weight: 600;
+  font-size: 0.875rem;
+}
+.alert-success .alert-body {
+  color: rgba(209, 250, 229, 0.85);
+  font-size: 0.75rem;
+  margin-top: 0.25rem;
+}
+
+.alert-error {
+  border: 1px solid rgba(244, 63, 94, 0.4);
+  background: rgba(76, 5, 25, 0.45);
+  color: #fecdd3;
+  border-radius: 0.375rem;
+  padding: 0.75rem;
+}
+.alert-error .alert-title {
+  color: #fda4af;
+  font-weight: 600;
+  font-size: 0.875rem;
+}
+.alert-error .alert-body {
+  color: rgba(254, 205, 211, 0.9);
+  font-size: 0.75rem;
+  margin-top: 0.25rem;
+}
+
+

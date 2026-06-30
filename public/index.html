@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Abzu — AdCP buyer orchestrator</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    window.ABZU_BASE_URL = "__ABZU_BASE_URL__";
+  </script>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body class="bg-slate-50 text-slate-900 antialiased">
+  <header class="border-b border-slate-200 bg-white">
+    <div class="mx-auto max-w-7xl px-6 py-3 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="h-8 w-8 rounded bg-slate-900 text-white grid place-items-center font-bold">Ab</div>
+        <div>
+          <div class="text-sm font-semibold leading-tight">Abzu</div>
+          <div class="text-xs text-slate-500 leading-tight">AdCP buyer orchestrator</div>
+        </div>
+      </div>
+      <nav class="flex gap-1 text-sm">
+        <a data-role="sam" class="role-link px-3 py-1.5 rounded hover:bg-slate-100">Sam · operator</a>
+        <a data-role="jordan" class="role-link px-3 py-1.5 rounded hover:bg-slate-100">Jordan · reviewer</a>
+        <a data-role="sponsor" class="role-link px-3 py-1.5 rounded hover:bg-slate-100">Sponsor · read-only</a>
+      </nav>
+      <div class="text-xs text-slate-500" id="status-pill">—</div>
+    </div>
+  </header>
+
+  <datalist id="known-plans"></datalist>
+  <datalist id="known-brands"></datalist>
+
+  <main class="mx-auto max-w-7xl px-6 py-6">
+    <!-- SAM -->
+    <section data-view="sam" class="hidden space-y-6">
+      <div>
+        <h1 class="text-xl font-semibold">Brief composer</h1>
+        <p class="text-sm text-slate-500">Submit a campaign brief, get ranked proposals, execute a buy through governance.</p>
+      </div>
+
+      <form id="brief-form" class="grid grid-cols-2 gap-4 bg-white p-5 rounded border border-slate-200">
+        <label class="col-span-1 text-sm">
+          <span class="block text-slate-600 mb-1">Advertiser name</span>
+          <input name="advertiser_name" required class="w-full border border-slate-300 rounded px-2 py-1.5" value="Acme Pet Foods" />
+        </label>
+        <label class="col-span-1 text-sm">
+          <span class="block text-slate-600 mb-1">Advertiser domain (optional)</span>
+          <input name="advertiser_domain" list="known-brands" autocomplete="off" class="brand-input w-full border border-slate-300 rounded px-2 py-1.5" placeholder="start typing — e.g. nike.com, adidas.com" />
+        </label>
+        <label class="col-span-2 text-sm">
+          <span class="block text-slate-600 mb-1">Brief (natural language)</span>
+          <textarea name="brief" rows="3" required class="w-full border border-slate-300 rounded px-2 py-1.5">Display awareness campaign for grain-free dog food, urban millennials with pets.</textarea>
+        </label>
+        <label class="col-span-1 text-sm">
+          <span class="block text-slate-600 mb-1">Budget</span>
+          <div class="flex gap-2">
+            <input name="budget_amount" type="number" required value="5000" class="flex-1 border border-slate-300 rounded px-2 py-1.5" />
+            <input name="budget_currency" required value="USD" class="w-20 border border-slate-300 rounded px-2 py-1.5" />
+          </div>
+        </label>
+        <label class="col-span-1 text-sm">
+          <span class="block text-slate-600 mb-1">Flight (YYYY-MM-DD)</span>
+          <div class="flex gap-2">
+            <input name="flight_start" required value="2026-07-15" class="flex-1 border border-slate-300 rounded px-2 py-1.5" />
+            <input name="flight_end" required value="2026-08-15" class="flex-1 border border-slate-300 rounded px-2 py-1.5" />
+          </div>
+        </label>
+        <label class="col-span-1 text-sm">
+          <span class="block text-slate-600 mb-1">Channels (comma-separated)</span>
+          <input name="channels" value="display" class="w-full border border-slate-300 rounded px-2 py-1.5" />
+        </label>
+        <label class="col-span-1 text-sm">
+          <span class="block text-slate-600 mb-1">Top N proposals</span>
+          <input name="top_n" type="number" value="3" min="1" max="20" class="w-full border border-slate-300 rounded px-2 py-1.5" />
+        </label>
+        <div class="col-span-2 flex justify-end">
+          <button type="submit" class="px-4 py-2 rounded bg-slate-900 text-white text-sm hover:bg-slate-700">Discover products</button>
+        </div>
+      </form>
+
+      <div id="brief-diagnostics" class="hidden text-sm bg-white p-4 rounded border border-slate-200"></div>
+
+      <div id="proposals" class="hidden">
+        <h2 class="text-lg font-semibold mb-2">Ranked proposals</h2>
+        <table class="w-full text-sm bg-white border border-slate-200 rounded overflow-hidden">
+          <thead class="bg-slate-100 text-slate-600 text-left">
+            <tr>
+              <th class="px-3 py-2">#</th>
+              <th class="px-3 py-2">Seller</th>
+              <th class="px-3 py-2">Product</th>
+              <th class="px-3 py-2">Delivery</th>
+              <th class="px-3 py-2">Score</th>
+              <th class="px-3 py-2 text-right">Action</th>
+            </tr>
+          </thead>
+          <tbody id="proposals-tbody"></tbody>
+        </table>
+      </div>
+
+      <div id="buy-panel" class="hidden bg-white p-5 rounded border border-slate-200 space-y-4">
+        <h2 class="text-lg font-semibold">Execute buy</h2>
+        <div class="text-sm text-slate-500">Governance check runs before any seller hit. Plan must be registered in Jordan view (or via API).</div>
+        <form id="buy-form" class="grid grid-cols-2 gap-4">
+          <input type="hidden" name="seller_id" />
+          <input type="hidden" name="product_id" />
+          <input type="hidden" name="pricing_option_id" />
+          <label class="col-span-1 text-sm">
+            <span class="block text-slate-600 mb-1">Plan ID</span>
+            <input name="plan_id" required list="known-plans" class="plan-input w-full border border-slate-300 rounded px-2 py-1.5" />
+          </label>
+          <label class="col-span-1 text-sm">
+            <span class="block text-slate-600 mb-1">Brand domain</span>
+            <input name="brand_domain" required list="known-brands" autocomplete="off" value="acme.example.com" class="brand-input w-full border border-slate-300 rounded px-2 py-1.5" />
+          </label>
+          <label class="col-span-1 text-sm">
+            <span class="block text-slate-600 mb-1">Budget</span>
+            <input name="buy_budget" type="number" required value="3000" class="w-full border border-slate-300 rounded px-2 py-1.5" />
+          </label>
+          <label class="col-span-1 text-sm">
+            <span class="block text-slate-600 mb-1">Flight (ISO datetime)</span>
+            <div class="flex gap-2">
+              <input name="buy_start" required value="2026-07-15T00:00:00Z" class="flex-1 border border-slate-300 rounded px-2 py-1.5 text-xs" />
+              <input name="buy_end" required value="2026-08-15T23:59:59Z" class="flex-1 border border-slate-300 rounded px-2 py-1.5 text-xs" />
+            </div>
+          </label>
+          <label class="col-span-2 text-sm flex items-center gap-2">
+            <input type="checkbox" name="accept_conditions" />
+            <span>Accept governance conditions (required when verdict=conditions)</span>
+          </label>
+          <fieldset class="col-span-2 border border-slate-200 rounded p-3 space-y-2">
+            <legend class="text-xs text-slate-500 px-1">Creative — sent to seller after buy succeeds; lands in seller's review queue</legend>
+            <div class="grid grid-cols-2 gap-3">
+              <label class="text-sm">
+                <span class="block text-slate-600 mb-1">Image URL (300×250 preferred)</span>
+                <input name="creative_image_url" type="url" class="w-full border border-slate-300 rounded px-2 py-1.5" placeholder="https://example.com/banner.png" />
+              </label>
+              <label class="text-sm">
+                <span class="block text-slate-600 mb-1">Click URL</span>
+                <input name="creative_click_url" type="url" class="w-full border border-slate-300 rounded px-2 py-1.5" placeholder="https://example.com/landing" />
+              </label>
+              <label class="text-sm">
+                <span class="block text-slate-600 mb-1">Alt text</span>
+                <input name="creative_alt_text" class="w-full border border-slate-300 rounded px-2 py-1.5" placeholder="Acme dog food banner" />
+              </label>
+              <label class="text-sm">
+                <span class="block text-slate-600 mb-1">Creative name</span>
+                <input name="creative_name" class="w-full border border-slate-300 rounded px-2 py-1.5" placeholder="acme-display-300x250-v1" />
+              </label>
+            </div>
+            <p class="text-xs text-slate-500">Leave Image URL empty to skip creative sync (buy only). Hosting is buyer-side — paste any reachable URL.</p>
+          </fieldset>
+          <div class="col-span-2 flex justify-end gap-2">
+            <button type="button" id="buy-cancel" class="px-4 py-2 rounded border border-slate-300 text-sm">Cancel</button>
+            <button type="submit" class="px-4 py-2 rounded bg-emerald-600 text-white text-sm hover:bg-emerald-500">Execute buy</button>
+          </div>
+        </form>
+      </div>
+
+      <div id="buy-result" class="hidden bg-white p-5 rounded border border-slate-200 space-y-3"></div>
+
+      <div id="creative-sync-result" class="hidden bg-white p-5 rounded border border-slate-200 space-y-3"></div>
+
+      <div id="delivery-panel" class="hidden bg-white p-5 rounded border border-slate-200 space-y-4">
+        <div class="flex items-center justify-between">
+          <h2 class="text-lg font-semibold">Delivery tracking</h2>
+          <button id="delivery-pull" class="text-xs px-3 py-1.5 rounded border border-slate-300 hover:bg-slate-50">Pull delivery now</button>
+        </div>
+        <div class="text-xs text-slate-500">
+          Pulls <code class="font-mono">get_media_buy_delivery</code> from the seller and posts <code class="font-mono">report_plan_outcome(outcome=delivery)</code> to governance.
+        </div>
+        <div id="delivery-snapshot" class="grid grid-cols-4 gap-3 text-sm"></div>
+        <div id="delivery-outcome" class="text-sm"></div>
+        <div id="delivery-error" class="hidden"></div>
+      </div>
+    </section>
+
+    <!-- JORDAN -->
+    <section data-view="jordan" class="hidden space-y-6">
+      <div>
+        <h1 class="text-xl font-semibold">Governance reviewer</h1>
+        <p class="text-sm text-slate-500">Register plans, inspect audit ledgers, surface conditions findings.</p>
+      </div>
+
+      <form id="plan-form" class="grid grid-cols-2 gap-4 bg-white p-5 rounded border border-slate-200">
+        <label class="col-span-1 text-sm">
+          <span class="block text-slate-600 mb-1">Plan ID</span>
+          <input name="plan_id" required list="known-plans" class="plan-input w-full border border-slate-300 rounded px-2 py-1.5" placeholder="plan_demo_001" />
+        </label>
+        <label class="col-span-1 text-sm">
+          <span class="block text-slate-600 mb-1">Brand domain</span>
+          <input name="brand_domain" required list="known-brands" autocomplete="off" value="acme.example.com" class="brand-input w-full border border-slate-300 rounded px-2 py-1.5" />
+        </label>
+        <label class="col-span-2 text-sm">
+          <span class="block text-slate-600 mb-1">Objectives</span>
+          <input name="objectives" required value="Awareness campaign for Acme Pet Foods" class="w-full border border-slate-300 rounded px-2 py-1.5" />
+        </label>
+        <label class="col-span-1 text-sm">
+          <span class="block text-slate-600 mb-1">Total budget</span>
+          <div class="flex gap-2">
+            <input name="budget_total" type="number" required value="10000" class="flex-1 border border-slate-300 rounded px-2 py-1.5" />
+            <input name="budget_currency" required value="USD" class="w-20 border border-slate-300 rounded px-2 py-1.5" />
+          </div>
+        </label>
+        <label class="col-span-1 text-sm">
+          <span class="block text-slate-600 mb-1">Reallocation threshold</span>
+          <input name="reallocation_threshold" type="number" required value="5000" class="w-full border border-slate-300 rounded px-2 py-1.5" />
+        </label>
+        <label class="col-span-1 text-sm">
+          <span class="block text-slate-600 mb-1">Flight start (ISO datetime)</span>
+          <input name="flight_start" required value="2026-07-15T00:00:00Z" class="w-full border border-slate-300 rounded px-2 py-1.5 text-xs" />
+        </label>
+        <label class="col-span-1 text-sm">
+          <span class="block text-slate-600 mb-1">Flight end (ISO datetime)</span>
+          <input name="flight_end" required value="2026-08-15T23:59:59Z" class="w-full border border-slate-300 rounded px-2 py-1.5 text-xs" />
+        </label>
+        <div class="col-span-2 flex justify-end">
+          <button type="submit" class="px-4 py-2 rounded bg-slate-900 text-white text-sm hover:bg-slate-700">Register plan</button>
+        </div>
+      </form>
+
+      <div id="plan-result" class="hidden text-sm bg-white p-4 rounded border border-slate-200"></div>
+
+      <div class="bg-white p-5 rounded border border-slate-200 space-y-4">
+        <div class="flex items-end gap-3">
+          <label class="text-sm flex-1">
+            <span class="block text-slate-600 mb-1">Inspect plan audit</span>
+            <input id="audit-plan-id" list="known-plans" class="plan-input w-full border border-slate-300 rounded px-2 py-1.5" placeholder="plan_id" />
+          </label>
+          <button id="audit-load" class="px-4 py-2 rounded border border-slate-300 text-sm hover:bg-slate-50">Load audit</button>
+        </div>
+        <div id="audit-summary" class="text-sm text-slate-500"></div>
+
+        <div id="conditions-queue-wrap" class="hidden space-y-2">
+          <h3 class="text-sm font-semibold text-amber-800">Conditions queue</h3>
+          <p class="text-xs text-slate-500">Checks where governance returned <code class="font-mono">verdict=conditions</code>. Operator must resubmit the buy with <code class="font-mono">accept_conditions=true</code> to proceed.</p>
+          <div id="conditions-queue" class="space-y-2"></div>
+        </div>
+
+        <div id="audit-table-wrap" class="hidden">
+          <h3 class="text-sm font-semibold text-slate-700 mb-2">Full audit log</h3>
+          <table class="w-full text-sm border border-slate-200 rounded overflow-hidden">
+            <thead class="bg-slate-100 text-slate-600 text-left">
+              <tr>
+                <th class="px-3 py-2">Time</th>
+                <th class="px-3 py-2">Type</th>
+                <th class="px-3 py-2">Verdict / Outcome</th>
+                <th class="px-3 py-2">Caller</th>
+                <th class="px-3 py-2">Detail</th>
+              </tr>
+            </thead>
+            <tbody id="audit-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- SPONSOR -->
+    <section data-view="sponsor" class="hidden space-y-6">
+      <div>
+        <h1 class="text-xl font-semibold">Sponsor dashboard</h1>
+        <p class="text-sm text-slate-500">Read-only view of plan budgets and audit timelines.</p>
+      </div>
+
+      <div class="bg-white p-5 rounded border border-slate-200">
+        <label class="text-sm block">
+          <span class="block text-slate-600 mb-1">Plan ID</span>
+          <input id="sponsor-plan-id" list="known-plans" class="plan-input w-full border border-slate-300 rounded px-2 py-1.5" placeholder="plan_id" />
+        </label>
+        <div class="mt-3 flex justify-end">
+          <button id="sponsor-load" class="px-4 py-2 rounded bg-slate-900 text-white text-sm hover:bg-slate-700">Load</button>
+        </div>
+      </div>
+
+      <div id="sponsor-summary" class="hidden grid grid-cols-4 gap-4">
+        <div class="bg-white p-4 rounded border border-slate-200">
+          <div class="text-xs text-slate-500">Authorized</div>
+          <div class="text-lg font-semibold" data-stat="authorized">—</div>
+        </div>
+        <div class="bg-white p-4 rounded border border-slate-200">
+          <div class="text-xs text-slate-500">Checks performed</div>
+          <div class="text-lg font-semibold" data-stat="checks">—</div>
+        </div>
+        <div class="bg-white p-4 rounded border border-slate-200">
+          <div class="text-xs text-slate-500">Outcomes reported</div>
+          <div class="text-lg font-semibold" data-stat="outcomes">—</div>
+        </div>
+        <div class="bg-white p-4 rounded border border-slate-200">
+          <div class="text-xs text-slate-500">Plan status</div>
+          <div class="text-lg font-semibold" data-stat="status">—</div>
+        </div>
+      </div>
+
+      <div id="sponsor-timeline-wrap" class="hidden bg-white p-5 rounded border border-slate-200">
+        <h2 class="text-base font-semibold mb-3">Timeline</h2>
+        <ol id="sponsor-timeline" class="text-sm space-y-2"></ol>
+      </div>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

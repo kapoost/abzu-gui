@@ -1,0 +1,29 @@
+.role-link {
+  cursor: pointer;
+  color: #475569;
+}
+.role-link.active {
+  background: #0f172a;
+  color: white;
+}
+.role-link.active:hover {
+  background: #1e293b;
+}
+.severity-critical { color: #b91c1c; font-weight: 600; }
+.severity-warning  { color: #b45309; font-weight: 600; }
+.severity-info     { color: #1e3a8a; }
+.verdict-approved  { color: #047857; font-weight: 600; }
+.verdict-denied    { color: #b91c1c; font-weight: 600; }
+.verdict-conditions { color: #b45309; font-weight: 600; }
+.outcome-accepted  { color: #047857; }
+.outcome-findings  { color: #b91c1c; }
+pre.json {
+  background: #0f172a;
+  color: #e2e8f0;
+  padding: 0.75rem;
+  border-radius: 0.375rem;
+  overflow-x: auto;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  max-height: 320px;
+}

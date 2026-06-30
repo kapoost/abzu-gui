@@ -1,0 +1,26 @@
+# Fly.io deployment for Abzu GUI.
+# Static Bun.serve over public/. ABZU_BASE_URL points at the orchestrator.
+# CF Pages migration path: drop fly app, build public/ as static, point Pages at it.
+
+app = "abzu-gui"
+primary_region = "fra"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  ABZU_BASE_URL = "https://api.rocketscience.pl"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"  # bun runtime baseline — 256mb risks OOM during boot
+  cpu_kind = "shared"
+  cpus = 1

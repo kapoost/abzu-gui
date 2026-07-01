@@ -501,6 +501,16 @@ function bindSam() {
       const altText = String(fd.get("creative_alt_text") ?? "").trim();
       const creativeName = String(fd.get("creative_name") ?? "").trim();
       const creativeId = creativeName || `abzu-${Date.now()}`;
+      // Pick creative format from the product_id the user just bought.
+      // The landing leaderboard needs a 728x90 asset; anything else
+      // defaults to the medium rectangle. Getting this wrong means the
+      // seller either crops or (worse) rejects the sync as
+      // FORMAT_MISMATCH downstream.
+      const productId = String(fd.get("product_id") ?? "");
+      const isLeaderboard = /landing|leaderboard|728x90/i.test(productId);
+      const creativeFormatId = isLeaderboard ? "display_728x90" : "display_300x250";
+      const creativeWidth = isLeaderboard ? 728 : 300;
+      const creativeHeight = isLeaderboard ? 90 : 250;
       const syncPayload = {
         seller_id: String(fd.get("seller_id") ?? ""),
         // Wire the just-created buy into sync so Abzu follows up with
@@ -515,13 +525,13 @@ function bindSam() {
         creatives: [{
           creative_id: creativeId,
           name: creativeId,
-          format_id: { agent_url: "https://creative.adcontextprotocol.org", id: "display_300x250" },
+          format_id: { agent_url: "https://creative.adcontextprotocol.org", id: creativeFormatId },
           assets: {
             image: {
               asset_type: "image",
               url: imageUrl,
-              width: 300,
-              height: 250,
+              width: creativeWidth,
+              height: creativeHeight,
               alt_text: altText || creativeId,
             },
             click_url: { asset_type: "url", url: clickUrl || imageUrl },

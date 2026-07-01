@@ -57,6 +57,35 @@ function patchDemoState(patch) {
   return next;
 }
 
+/* Pull plan.brand_domain + plan.objectives into Sam's brief form so the
+ * user doesn't re-type the same info Jordan already approved. Brief text
+ * gets pre-filled from objectives only when the user hasn't touched it yet
+ * (preserves manual edits across navigation). */
+function applyPlanInheritsToBrief() {
+  const state = getDemoState();
+  if (!state.plan_brand_domain && !state.plan_objectives) return;
+  const briefForm = document.getElementById("brief-form");
+  if (!briefForm) return;
+  const advDomain = briefForm.querySelector('[name="advertiser_domain"]');
+  if (advDomain && state.plan_brand_domain && (!advDomain.value || advDomain.value === "acme.example.com")) {
+    advDomain.value = state.plan_brand_domain;
+    advDomain.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+  const briefText = briefForm.querySelector('[name="brief"]');
+  if (briefText && state.plan_objectives && !briefText.dataset.userTouched) {
+    briefText.value = state.plan_objectives;
+  }
+  // Same for the buy form's brand_domain so executing the buy doesn't
+  // re-prompt for the brand the plan was registered against.
+  const buyForm = document.getElementById("buy-form");
+  if (buyForm && state.plan_brand_domain) {
+    const brandDomain = buyForm.querySelector('[name="brand_domain"]');
+    if (brandDomain && (!brandDomain.value || brandDomain.value === "acme.example.com")) {
+      brandDomain.value = state.plan_brand_domain;
+    }
+  }
+}
+
 function updateBreadcrumb() {
   const state = getDemoState();
   for (const el of $$(".breadcrumb")) {
@@ -158,6 +187,40 @@ async function liveBrandSearch(query) {
   } catch {}
 }
 
+let brandResolveTimer = null;
+let brandResolveSeq = 0;
+const brandResolveCache = new Map();
+
+/* Try to fetch /.well-known/brand.json on the typed domain via Abzu's
+ * proxy. If the brand publishes one, lift name/tagline into the form so
+ * the user doesn't have to type their own brand back at us. Static
+ * brands.json autofill (brandsByDomain) runs first; this is a richer
+ * upgrade for domains that adopt AdCP brand.json. */
+async function resolveBrandFromDomain(domain, form) {
+  if (!domain || !form) return;
+  const key = domain.toLowerCase();
+  if (brandResolveCache.has(key)) return;
+  brandResolveCache.set(key, "pending");
+  const seq = ++brandResolveSeq;
+  try {
+    const r = await abzu(`/brand-resolve?domain=${encodeURIComponent(domain)}`);
+    if (seq !== brandResolveSeq) return;
+    if (!r.ok || !r.body?.found) return;
+    brandResolveCache.set(key, r.body);
+    const advertiserName = form.querySelector('[name="advertiser_name"]');
+    if (advertiserName && r.body.name && !advertiserName.dataset.userTouched) {
+      advertiserName.value = r.body.name;
+    }
+    const briefText = form.querySelector('[name="brief"]');
+    if (briefText && r.body.tagline && !briefText.dataset.userTouched) {
+      const cats = Array.isArray(r.body.categories) && r.body.categories.length > 0
+        ? ` Audience interests: ${r.body.categories.slice(0, 4).join(", ")}.`
+        : "";
+      briefText.value = `${r.body.tagline}${cats}`;
+    }
+  } catch {}
+}
+
 function wireBrandAutofill() {
   document.body.addEventListener("input", (e) => {
     const el = e.target;
@@ -176,6 +239,12 @@ function wireBrandAutofill() {
     if (raw.length >= 2) {
       clearTimeout(brandSearchTimer);
       brandSearchTimer = setTimeout(() => liveBrandSearch(raw), 300);
+    }
+    // Try /.well-known/brand.json once the typed value looks like a real
+    // domain. Cheap server-side fetch — debounced + cached.
+    if (/^[a-z0-9-]+(\.[a-z]{2,})+$/i.test(raw)) {
+      clearTimeout(brandResolveTimer);
+      brandResolveTimer = setTimeout(() => resolveBrandFromDomain(raw, el.form), 600);
     }
   });
   document.body.addEventListener("input", (e) => {
@@ -665,10 +734,17 @@ function bindJordan() {
     const el = $("#plan-result");
     el.classList.remove("hidden");
     if (r.ok) {
+      const planBrandDomain = String(fd.get("brand_domain") || "");
+      const planObjectives = String(fd.get("objectives") || "");
+      patchDemoState({
+        plan_brand_domain: planBrandDomain,
+        plan_objectives: planObjectives,
+      });
+      applyPlanInheritsToBrief();
       el.innerHTML = `
         <div class="alert-success">
           <div class="alert-title">✓ Plan registered</div>
-          <div class="alert-body">plan_id = <code class="font-mono">${esc(fd.get("plan_id"))}</code>, status = active</div>
+          <div class="alert-body">plan_id = <code class="font-mono">${esc(fd.get("plan_id"))}</code>, status = active. Brand and objectives carry over to Sam's brief.</div>
         </div>
       `;
       const planId = String(fd.get("plan_id"));
@@ -916,6 +992,11 @@ function boot() {
   });
   activateRole(role);
   updateBreadcrumb();
+  applyPlanInheritsToBrief();
+  // Mark brief textarea as touched if user types — so we don't overwrite
+  // their edits when navigating back.
+  const briefText = document.querySelector('#brief-form [name="brief"]');
+  briefText?.addEventListener("input", () => { briefText.dataset.userTouched = "1"; });
   // Auto-load operator queue when entering that tab so the user doesn't have
   // to hunt for the Reload button after coming back from Sam's buy.
   for (const link of $$(".role-link")) {

@@ -434,10 +434,7 @@ function bindSam() {
         .split(",")
         .map((s) => s.trim())
         .filter(Boolean),
-      formats: String(fd.get("formats") || "")
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean),
+      formats: fd.getAll("formats").map((s) => String(s).trim()).filter(Boolean),
       top_n: Number(fd.get("top_n") || 3),
     };
     const submitBtn = $("#brief-submit");
@@ -606,8 +603,11 @@ async function executeSingleBuy(fd, override) {
   let syncRes = null;
   const rawImageUrl = String(fd.get("creative_image_url") ?? "").trim();
   const brandDomain = String(fd.get("brand_domain") ?? "").trim();
-  const isLeaderboardForFallback = /landing|leaderboard|728x90/i.test(override.product_id);
-  const fallbackSize = isLeaderboardForFallback ? "728x90" : "300x250";
+  // Purrsonality's two placements are both 300x250 rectangles now; the
+  // 728x90 leaderboard was retired because it overflowed the landing
+  // page's mobile-first layout. Kept the branch shape for future
+  // re-differentiation on other seller products.
+  const fallbackSize = "300x250";
   const imageUrl = rawImageUrl || agentCraftedCreativeUrl(brandDomain, override.product_id, fallbackSize);
   if (buyRes.ok && imageUrl && buyRes.body?.media_buy?.media_buy_id) {
     const clickUrl = String(fd.get("creative_click_url") ?? "").trim();
@@ -619,10 +619,12 @@ async function executeSingleBuy(fd, override) {
     // relies on. Suffix with product_id so multi-buy runs stay legible.
     const creativeIdBase = creativeName || `abzu-${Date.now()}`;
     const creativeId = `${creativeIdBase}__${override.product_id}`.slice(0, 96);
-    const isLeaderboard = /landing|leaderboard|728x90/i.test(override.product_id);
-    const creativeFormatId = isLeaderboard ? "display_728x90" : "display_300x250";
-    const creativeWidth = isLeaderboard ? 728 : 300;
-    const creativeHeight = isLeaderboard ? 90 : 250;
+    // Both purrsonality placements are 300x250 rectangles; any other
+    // seller/product still defaults here — future custom sizing hooks in
+    // per-product policy would live at this line.
+    const creativeFormatId = "display_300x250";
+    const creativeWidth = 300;
+    const creativeHeight = 250;
     const syncPayload = {
       seller_id: override.seller_id,
       assign_to_media_buy_id: buyRes.body.media_buy.media_buy_id,

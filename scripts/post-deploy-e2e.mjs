@@ -46,12 +46,12 @@ const BRAND_NAME = process.env.SEED_BRAND_NAME ?? "Acme";
 const PLACEMENTS = [
   {
     key: "landing",
-    productId: "purr_landing_leaderboard_v1",
+    productId: "purr_landing_rectangle_v1",
     pricingOptionId: "cpm_fixed_1",
-    formatId: "display_728x90",
-    size: "728x90",
-    w: 728,
-    h: 90,
+    formatId: "display_300x250",
+    size: "300x250",
+    w: 300,
+    h: 250,
     personaPath: "/",
   },
   {

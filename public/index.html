@@ -138,8 +138,21 @@
           <input name="channels" value="display" class="w-full border border-zinc-700 rounded px-2 py-1.5" />
         </label>
         <label class="col-span-1 text-sm">
-          <span class="block text-zinc-400 mb-1">Formats (comma-separated)<details class="helper"><summary>?</summary><div class="helper-body">Creative format IDs passed to sellers as <code>filters.format_ids</code> — signals what dimensions/media the buyer plans to run. Without this, some sellers return empty proposals. Standard IDs live in the creative-agent format registry (e.g. <code>display_300x250</code>, <code>video_hosted</code>). If empty, Abzu derives defaults from channels. <a href="https://adcontextprotocol.org/docs/creative/formats" target="_blank">AdCP formats →</a></div></details></span>
-          <input name="formats" value="display_300x250" class="w-full border border-zinc-700 rounded px-2 py-1.5" />
+          <span class="block text-zinc-400 mb-1">Formats<details class="helper"><summary>?</summary><div class="helper-body">Creative format IDs passed to sellers as <code>filters.format_ids</code>. Tick the ones you plan to run — sellers use this to scope the proposals they return. If nothing is selected, Abzu derives defaults from channels. <a href="https://adcontextprotocol.org/docs/creative/formats" target="_blank">AdCP formats →</a></div></details></span>
+          <div class="flex flex-wrap gap-1.5" data-format-picker>
+            <label class="format-chip"><input type="checkbox" name="formats" value="display_300x250" checked><span>300×250 <em>rectangle</em></span></label>
+            <label class="format-chip"><input type="checkbox" name="formats" value="display_728x90"><span>728×90 <em>leaderboard</em></span></label>
+            <label class="format-chip"><input type="checkbox" name="formats" value="display_336x280"><span>336×280 <em>lg rect</em></span></label>
+            <label class="format-chip"><input type="checkbox" name="formats" value="display_300x600"><span>300×600 <em>half page</em></span></label>
+            <label class="format-chip"><input type="checkbox" name="formats" value="display_160x600"><span>160×600 <em>skyscraper</em></span></label>
+            <label class="format-chip"><input type="checkbox" name="formats" value="display_970x250"><span>970×250 <em>billboard</em></span></label>
+            <label class="format-chip"><input type="checkbox" name="formats" value="display_970x90"><span>970×90 <em>super lb</em></span></label>
+            <label class="format-chip"><input type="checkbox" name="formats" value="display_320x50"><span>320×50 <em>mobile</em></span></label>
+            <label class="format-chip"><input type="checkbox" name="formats" value="display_320x100"><span>320×100 <em>lg mobile</em></span></label>
+            <label class="format-chip"><input type="checkbox" name="formats" value="display_250x250"><span>250×250 <em>square</em></span></label>
+            <label class="format-chip"><input type="checkbox" name="formats" value="display_468x60"><span>468×60 <em>full banner</em></span></label>
+            <label class="format-chip"><input type="checkbox" name="formats" value="display_responsive"><span>responsive</span></label>
+          </div>
         </label>
         <label class="col-span-1 text-sm">
           <span class="block text-zinc-400 mb-1">Top N proposals</span>

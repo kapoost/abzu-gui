@@ -464,92 +464,249 @@ function bindSam() {
   $("#buy-form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
     const fd = new FormData($("#buy-form"));
-    const body = {
-      seller_id: fd.get("seller_id"),
-      plan_id: fd.get("plan_id"),
-      account: {
-        brand: { domain: fd.get("brand_domain") },
-        operator: fd.get("brand_domain"),
-      },
-      brand: { domain: fd.get("brand_domain"), name: "Acme" },
-      product_id: fd.get("product_id"),
-      pricing_option_id: fd.get("pricing_option_id"),
-      budget: Number(fd.get("buy_budget")),
-      currency: "USD",
-      flight: { start: fd.get("buy_start"), end: fd.get("buy_end") },
-      accept_conditions: fd.get("accept_conditions") === "on",
-    };
     const buyBtn = $("#buy-submit");
-    if (buyBtn) { buyBtn.disabled = true; buyBtn.textContent = "Executing…"; }
-    const r = await abzu("/execution/buy", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (buyBtn) { buyBtn.disabled = false; buyBtn.textContent = "Execute buy"; }
-    if (r.ok) {
-      setLastPlanId(String(fd.get("plan_id") ?? ""));
-      refreshKnownPlans();
-      const mb = r.body?.media_buy?.media_buy_id;
-      if (mb) patchDemoState({ media_buy_id: mb });
-    }
-    renderBuyResult(r);
+    const firstOverride = {
+      seller_id: String(fd.get("seller_id") ?? ""),
+      product_id: String(fd.get("product_id") ?? ""),
+      pricing_option_id: String(fd.get("pricing_option_id") ?? ""),
+    };
+    const queue = Array.isArray(multiBuyQueue) ? multiBuyQueue.slice() : [];
+    const isMulti = queue.length > 0;
 
-    const imageUrl = String(fd.get("creative_image_url") ?? "").trim();
-    if (r.ok && imageUrl && r.body?.media_buy?.media_buy_id) {
-      const clickUrl = String(fd.get("creative_click_url") ?? "").trim();
-      const altText = String(fd.get("creative_alt_text") ?? "").trim();
-      const creativeName = String(fd.get("creative_name") ?? "").trim();
-      const creativeId = creativeName || `abzu-${Date.now()}`;
-      // Pick creative format from the product_id the user just bought.
-      // The landing leaderboard needs a 728x90 asset; anything else
-      // defaults to the medium rectangle. Getting this wrong means the
-      // seller either crops or (worse) rejects the sync as
-      // FORMAT_MISMATCH downstream.
-      const productId = String(fd.get("product_id") ?? "");
-      const isLeaderboard = /landing|leaderboard|728x90/i.test(productId);
-      const creativeFormatId = isLeaderboard ? "display_728x90" : "display_300x250";
-      const creativeWidth = isLeaderboard ? 728 : 300;
-      const creativeHeight = isLeaderboard ? 90 : 250;
-      const syncPayload = {
-        seller_id: String(fd.get("seller_id") ?? ""),
-        // Wire the just-created buy into sync so Abzu follows up with
-        // update_media_buy(creative_assignments) — without it the seller
-        // never links served impressions back to this media_buy_id, and
-        // delivery pulls return zeros even when the slot is serving.
-        assign_to_media_buy_id: r.body.media_buy.media_buy_id,
-        account: {
-          brand: { domain: String(fd.get("brand_domain") ?? "") },
-          operator: String(fd.get("brand_domain") ?? ""),
-        },
-        creatives: [{
-          creative_id: creativeId,
-          name: creativeId,
-          format_id: { agent_url: "https://creative.adcontextprotocol.org", id: creativeFormatId },
-          assets: {
-            image: {
-              asset_type: "image",
-              url: imageUrl,
-              width: creativeWidth,
-              height: creativeHeight,
-              alt_text: altText || creativeId,
-            },
-            click_url: { asset_type: "url", url: clickUrl || imageUrl },
-          },
-        }],
-      };
-      const cs = await abzu("/creatives/sync", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(syncPayload),
-      });
-      if (cs.ok) {
-        const cid = cs.body?.creatives?.[0]?.creative_id;
-        if (cid) patchDemoState({ creative_id: cid });
-      }
-      renderCreativeSyncResult(cs);
+    const results = [];
+    const runSet = [firstOverride, ...queue.map((p) => ({
+      seller_id: p.seller_id,
+      product_id: p.product?.product_id ?? "",
+      pricing_option_id: p.product?.pricing_options?.[0]?.pricing_option_id ?? "",
+    }))];
+
+    if (buyBtn) buyBtn.disabled = true;
+    for (let i = 0; i < runSet.length; i++) {
+      const override = runSet[i];
+      if (buyBtn) buyBtn.textContent = isMulti ? `Executing ${i + 1}/${runSet.length}…` : "Executing…";
+      const res = await executeSingleBuy(fd, override);
+      results.push({ override, ...res });
+    }
+    if (buyBtn) { buyBtn.disabled = false; buyBtn.textContent = "Execute buy"; }
+
+    if (isMulti) {
+      renderMultiBuyResults(results);
+      clearMultiBuyBanner();
+    } else {
+      const only = results[0];
+      renderBuyResult(only.buyRes);
+      if (only.syncRes) renderCreativeSyncResult(only.syncRes);
     }
   });
+}
+
+const IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif|avif|svg)(\?|#|$)/i;
+const IMAGE_MIME_RE = /^image\/(png|jpeg|jpg|webp|gif|avif|svg\+xml)/i;
+
+/* Best-effort probe: URL extension check + HEAD to sniff content-type.
+ * Some CDNs strip HEAD; if HEAD fails we fall back to the extension
+ * signal so a valid URL with a stripped HEAD does not block the buy. */
+async function probeImageUrl(url) {
+  if (!url) return { ok: false, reason: "empty" };
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return { ok: false, reason: "not a valid URL" };
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    return { ok: false, reason: `unsupported protocol ${parsed.protocol}` };
+  }
+  const extHit = IMAGE_EXT_RE.test(parsed.pathname);
+  try {
+    const r = await fetch(url, { method: "HEAD", mode: "cors", cache: "no-store" });
+    if (!r.ok) {
+      if (extHit) return { ok: true, source: "extension (HEAD " + r.status + ")", contentType: null };
+      return { ok: false, reason: `HEAD returned ${r.status}` };
+    }
+    const ct = r.headers.get("content-type") ?? "";
+    if (IMAGE_MIME_RE.test(ct)) return { ok: true, source: "content-type", contentType: ct };
+    if (extHit) return { ok: true, source: "extension (content-type " + (ct || "none") + ")", contentType: ct };
+    return { ok: false, reason: `content-type "${ct || "none"}" is not image/*` };
+  } catch (err) {
+    if (extHit) return { ok: true, source: "extension (HEAD blocked)", contentType: null };
+    return { ok: false, reason: "HEAD blocked and URL does not end in an image extension" };
+  }
+}
+
+function wireImageUrlCheck() {
+  const input = $("#creative-image-url");
+  const out = $("#creative-image-check");
+  if (!input || !out) return;
+  let seq = 0;
+  input.addEventListener("blur", async () => {
+    const url = input.value.trim();
+    if (!url) {
+      out.textContent = "";
+      out.className = "mt-1 text-xs text-zinc-500 min-h-[1em]";
+      return;
+    }
+    const my = ++seq;
+    out.textContent = "checking…";
+    out.className = "mt-1 text-xs text-zinc-500 min-h-[1em]";
+    const res = await probeImageUrl(url);
+    if (my !== seq) return;
+    if (res.ok) {
+      out.textContent = `image ok · ${res.source}${res.contentType ? " · " + res.contentType : ""}`;
+      out.className = "mt-1 text-xs text-emerald-400 min-h-[1em]";
+    } else {
+      out.textContent = `not an image · ${res.reason}`;
+      out.className = "mt-1 text-xs text-rose-400 min-h-[1em]";
+    }
+  });
+}
+
+/* Build the seller-side SVG creative URL used when the buyer skipped
+ * the creative_image_url field. The endpoint (seller /generated/
+ * agent-creative.svg) renders a branded banner sized to the placement,
+ * so the ad slot never serves a blank iframe for an approved buy. */
+function agentCraftedCreativeUrl(brand, productId, size) {
+  const seller = "https://seller.purrsonality.rocketscience.pl";
+  const qs = new URLSearchParams({
+    brand: brand || "Advertiser",
+    product: productId || "adcp_placement",
+    size: size || "300x250",
+  });
+  return `${seller}/generated/agent-creative.svg?${qs.toString()}`;
+}
+
+async function executeSingleBuy(fd, override) {
+  const body = {
+    seller_id: override.seller_id,
+    plan_id: fd.get("plan_id"),
+    account: {
+      brand: { domain: fd.get("brand_domain") },
+      operator: fd.get("brand_domain"),
+    },
+    brand: { domain: fd.get("brand_domain"), name: "Acme" },
+    product_id: override.product_id,
+    pricing_option_id: override.pricing_option_id,
+    budget: Number(fd.get("buy_budget")),
+    currency: "USD",
+    flight: { start: fd.get("buy_start"), end: fd.get("buy_end") },
+    accept_conditions: fd.get("accept_conditions") === "on",
+  };
+  const buyRes = await abzu("/execution/buy", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (buyRes.ok) {
+    setLastPlanId(String(fd.get("plan_id") ?? ""));
+    refreshKnownPlans();
+    const mb = buyRes.body?.media_buy?.media_buy_id;
+    if (mb) patchDemoState({ media_buy_id: mb });
+  }
+
+  let syncRes = null;
+  const rawImageUrl = String(fd.get("creative_image_url") ?? "").trim();
+  const brandDomain = String(fd.get("brand_domain") ?? "").trim();
+  const isLeaderboardForFallback = /landing|leaderboard|728x90/i.test(override.product_id);
+  const fallbackSize = isLeaderboardForFallback ? "728x90" : "300x250";
+  const imageUrl = rawImageUrl || agentCraftedCreativeUrl(brandDomain, override.product_id, fallbackSize);
+  if (buyRes.ok && imageUrl && buyRes.body?.media_buy?.media_buy_id) {
+    const clickUrl = String(fd.get("creative_click_url") ?? "").trim();
+    const altText = String(fd.get("creative_alt_text") ?? "").trim();
+    const creativeName = String(fd.get("creative_name") ?? "").trim();
+    // Force unique creative_id per buy — reusing the exact name across
+    // media buys would either dedupe on sync or attach one creative to
+    // multiple buys, which defeats the per-buy attribution the demo
+    // relies on. Suffix with product_id so multi-buy runs stay legible.
+    const creativeIdBase = creativeName || `abzu-${Date.now()}`;
+    const creativeId = `${creativeIdBase}__${override.product_id}`.slice(0, 96);
+    const isLeaderboard = /landing|leaderboard|728x90/i.test(override.product_id);
+    const creativeFormatId = isLeaderboard ? "display_728x90" : "display_300x250";
+    const creativeWidth = isLeaderboard ? 728 : 300;
+    const creativeHeight = isLeaderboard ? 90 : 250;
+    const syncPayload = {
+      seller_id: override.seller_id,
+      assign_to_media_buy_id: buyRes.body.media_buy.media_buy_id,
+      account: {
+        brand: { domain: String(fd.get("brand_domain") ?? "") },
+        operator: String(fd.get("brand_domain") ?? ""),
+      },
+      creatives: [{
+        creative_id: creativeId,
+        name: creativeId,
+        format_id: { agent_url: "https://creative.adcontextprotocol.org", id: creativeFormatId },
+        assets: {
+          image: {
+            asset_type: "image",
+            url: imageUrl,
+            width: creativeWidth,
+            height: creativeHeight,
+            alt_text: altText || creativeId,
+          },
+          click_url: { asset_type: "url", url: clickUrl || imageUrl },
+        },
+      }],
+    };
+    syncRes = await abzu("/creatives/sync", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(syncPayload),
+    });
+    if (syncRes.ok) {
+      const cid = syncRes.body?.creatives?.[0]?.creative_id;
+      if (cid) patchDemoState({ creative_id: cid });
+    }
+  }
+  return { buyRes, syncRes };
+}
+
+function renderMultiBuyResults(results) {
+  const el = $("#buy-result");
+  if (!el) return;
+  el.classList.remove("hidden");
+  const rows = results.map((r, i) => {
+    const buy = r.buyRes;
+    const sync = r.syncRes;
+    const mb = buy.body?.media_buy?.media_buy_id ?? "—";
+    const verdict = buy.body?.governance_check?.verdict ?? "—";
+    const buyStatus = buy.ok
+      ? `<span class="verdict-${esc(verdict)}">${esc(verdict)}</span>`
+      : `<span class="text-rose-400">HTTP ${buy.status} · ${esc(buy.body?.code ?? buy.body?.error ?? "error")}</span>`;
+    const syncStatus = sync
+      ? (sync.ok
+          ? `<span class="text-emerald-400">synced</span>`
+          : `<span class="text-rose-400">sync HTTP ${sync.status}</span>`)
+      : `<span class="text-zinc-500">no creative</span>`;
+    return `<tr class="border-t border-zinc-800">
+      <td class="px-3 py-2 text-zinc-500">${i + 1}</td>
+      <td class="px-3 py-2 font-mono text-xs">${esc(r.override.seller_id)}</td>
+      <td class="px-3 py-2 font-mono text-xs">${esc(r.override.product_id)}</td>
+      <td class="px-3 py-2 font-mono text-xs">${esc(mb)}</td>
+      <td class="px-3 py-2 text-xs">${buyStatus}</td>
+      <td class="px-3 py-2 text-xs">${syncStatus}</td>
+    </tr>`;
+  }).join("");
+  const okCount = results.filter((r) => r.buyRes.ok).length;
+  el.innerHTML = `
+    <div class="flex items-center justify-between mb-2">
+      <h3 class="text-base font-semibold">Multi-buy executed · ${okCount}/${results.length} succeeded</h3>
+    </div>
+    <table class="min-w-full text-sm border border-zinc-800 rounded">
+      <thead class="bg-zinc-800/30 text-xs uppercase text-zinc-500">
+        <tr>
+          <th class="text-left px-3 py-2">#</th>
+          <th class="text-left px-3 py-2">Seller</th>
+          <th class="text-left px-3 py-2">Product</th>
+          <th class="text-left px-3 py-2">media_buy_id</th>
+          <th class="text-left px-3 py-2">Verdict</th>
+          <th class="text-left px-3 py-2">Creative</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <details class="mt-2 text-xs text-zinc-500"><summary class="cursor-pointer hover:text-zinc-300">Raw responses</summary>${fmtJson(results.map((r) => ({ override: r.override, buy: r.buyRes.body, sync: r.syncRes?.body ?? null })))}</details>
+  `;
+  $("#delivery-panel")?.classList.add("hidden");
+  lastBuyContext = null;
 }
 
 const KNOWN_SELLER_PLACEHOLDERS = [
@@ -680,20 +837,26 @@ function sellerCardHtml(s, i) {
   `;
 }
 
+let currentProposals = [];
+let multiBuyQueue = null;
+
 function renderProposals(body) {
   const wrap = $("#proposals");
   const tbody = $("#proposals-tbody");
   tbody.innerHTML = "";
-  const proposals = body.proposals || [];
+  currentProposals = body.proposals || [];
+  const proposals = currentProposals;
   if (proposals.length === 0) {
     wrap.classList.remove("hidden");
-    tbody.innerHTML = `<tr><td colspan="6" class="px-3 py-3 text-zinc-500">No proposals.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7" class="px-3 py-3 text-zinc-500">No proposals.</td></tr>`;
+    updateProposalsSelectionUI();
     return;
   }
   proposals.forEach((p, i) => {
     const tr = document.createElement("tr");
     tr.className = "border-t border-zinc-800 hover:bg-zinc-800/30";
     tr.innerHTML = `
+      <td class="px-3 py-2 align-middle"><input type="checkbox" data-select-idx="${i}" class="proposal-select align-middle" /></td>
       <td class="px-3 py-2 text-zinc-500">${i + 1}</td>
       <td class="px-3 py-2 text-zinc-200">${esc(p.seller_id)}</td>
       <td class="px-3 py-2">
@@ -720,6 +883,78 @@ function renderProposals(body) {
   $$(".buy-button", tbody).forEach((btn) => {
     btn.addEventListener("click", () => openBuyPanel(proposals[Number(btn.dataset.idx)]));
   });
+  $$(".proposal-select", tbody).forEach((cb) => {
+    cb.addEventListener("change", updateProposalsSelectionUI);
+  });
+  const selectAll = $("#proposals-select-all");
+  if (selectAll) selectAll.checked = false;
+  updateProposalsSelectionUI();
+}
+
+function getSelectedProposalIndexes() {
+  return $$(".proposal-select").filter((cb) => cb.checked).map((cb) => Number(cb.dataset.selectIdx));
+}
+
+function updateProposalsSelectionUI() {
+  const count = getSelectedProposalIndexes().length;
+  const label = $("#proposals-select-count");
+  const btn = $("#proposals-buy-selected");
+  if (label) label.textContent = `${count} selected`;
+  if (btn) {
+    btn.textContent = count > 1 ? `Buy ${count} selected` : "Buy selected";
+    btn.classList.toggle("hidden", count === 0);
+    btn.disabled = count === 0;
+  }
+  const selectAll = $("#proposals-select-all");
+  const total = $$(".proposal-select").length;
+  if (selectAll && total > 0) {
+    selectAll.checked = count === total;
+    selectAll.indeterminate = count > 0 && count < total;
+  }
+}
+
+function openMultiBuyPanel() {
+  const indexes = getSelectedProposalIndexes();
+  if (indexes.length === 0) return;
+  const selectedProposals = indexes.map((i) => currentProposals[i]).filter(Boolean);
+  if (selectedProposals.length === 0) return;
+  // For a single selection, fall through to the standard single-buy panel
+  // so nothing changes for the pre-existing flow.
+  if (selectedProposals.length === 1) {
+    openBuyPanel(selectedProposals[0]);
+    return;
+  }
+  // Multi mode: fill the form with the first proposal, queue the rest so
+  // submitBuy iterates through them using the same form values (creative,
+  // budget split, flight). Format per creative is derived per product_id
+  // at sync time (see the existing productId → format branch).
+  multiBuyQueue = selectedProposals.slice(1);
+  openBuyPanel(selectedProposals[0]);
+  renderMultiBuyBanner(selectedProposals);
+}
+
+function renderMultiBuyBanner(proposals) {
+  const panel = $("#buy-panel");
+  if (!panel) return;
+  const existing = panel.querySelector("[data-multi-banner]");
+  if (existing) existing.remove();
+  const banner = document.createElement("div");
+  banner.setAttribute("data-multi-banner", "1");
+  banner.className = "alert-success border border-violet-500/40 bg-violet-500/10 text-violet-100 rounded p-3 text-sm space-y-1";
+  const rows = proposals.map((p, i) => `<li class="font-mono text-xs">${i + 1}. ${esc(p.seller_id)} · ${esc(p.product?.product_id ?? "")}</li>`).join("");
+  banner.innerHTML = `
+    <div class="font-semibold">Multi-buy · ${proposals.length} proposals queued</div>
+    <div class="text-xs text-violet-200/80">Budget below applies per buy. Execute buy runs them sequentially; creative sync attaches to each media_buy, format auto-picks per product_id.</div>
+    <ul class="mt-1 space-y-0.5">${rows}</ul>
+  `;
+  const h2 = panel.querySelector("h2");
+  if (h2 && h2.parentNode) h2.parentNode.insertBefore(banner, h2.nextSibling);
+}
+
+function clearMultiBuyBanner() {
+  multiBuyQueue = null;
+  const banner = document.querySelector("#buy-panel [data-multi-banner]");
+  if (banner) banner.remove();
 }
 
 function openBuyPanel(proposal) {
@@ -1196,6 +1431,16 @@ function boot() {
     const planId = e.target.value;
     if (planId) applyPlanSelectionToSam(planId);
   });
+  $("#proposals-buy-selected")?.addEventListener("click", openMultiBuyPanel);
+  wireImageUrlCheck();
+  $("#proposals-select-all")?.addEventListener("change", (e) => {
+    const on = e.target.checked;
+    for (const cb of $$(".proposal-select")) cb.checked = on;
+    updateProposalsSelectionUI();
+  });
+  // Clicking Buy on any row while a multi-buy queue is armed cancels
+  // that queue — the user is switching to a single-buy flow.
+  $("#buy-cancel")?.addEventListener("click", clearMultiBuyBanner);
   // User typed into brief's advertiser_domain — mark it so
   // applyPlanSelectionToSam doesn't overwrite their edits.
   document.body.addEventListener("input", (e) => {

@@ -165,10 +165,17 @@
       <div id="brief-diagnostics" class="hidden card p-5 text-sm"></div>
 
       <div id="proposals" class="hidden">
-        <h2 class="text-lg font-semibold mb-2">Ranked proposals</h2>
+        <div class="flex items-center justify-between mb-2 gap-3">
+          <h2 class="text-lg font-semibold">Ranked proposals</h2>
+          <div class="flex items-center gap-3 text-xs text-zinc-400">
+            <span id="proposals-select-count">0 selected</span>
+            <button id="proposals-buy-selected" type="button" class="hidden px-3 py-1 rounded bg-violet-600 text-white hover:bg-violet-500 disabled:opacity-40">Buy selected</button>
+          </div>
+        </div>
         <table class="w-full text-sm card rounded overflow-hidden">
           <thead class="bg-zinc-800 text-zinc-400 text-left">
             <tr>
+              <th class="px-3 py-2 w-8"><input type="checkbox" id="proposals-select-all" class="align-middle" /></th>
               <th class="px-3 py-2">#</th>
               <th class="px-3 py-2">Seller</th>
               <th class="px-3 py-2">Product</th>
@@ -215,8 +222,9 @@
             <legend class="text-xs text-zinc-500 px-1">Creative — pushed via <code>sync_creatives</code> after the buy; lands in the seller's review queue<details class="helper"><summary>?</summary><div class="helper-body">After a successful <code>create_media_buy</code>, Abzu calls <code>sync_creatives</code> on the same seller with the assets you provide. Sandbox principals auto-approve; live principals (Abzu included) land in <code>pending_review</code> until an operator approves. <a href="https://adcontextprotocol.org/docs/media-buy/sync_creatives" target="_blank">AdCP spec →</a></div></details></legend>
             <div class="grid grid-cols-2 gap-3">
               <label class="text-sm">
-                <span class="block text-zinc-400 mb-1">Image URL (300×250 preferred)</span>
-                <input name="creative_image_url" type="url" class="w-full border border-zinc-700 rounded px-2 py-1.5" placeholder="https://example.com/banner.png" />
+                <span class="block text-zinc-400 mb-1">Image URL <span class="text-zinc-500">(PNG/JPG/WEBP/GIF — leave empty for agent-crafted SVG)</span></span>
+                <input id="creative-image-url" name="creative_image_url" type="url" class="w-full border border-zinc-700 rounded px-2 py-1.5" placeholder="empty → seller renders a branded SVG for the placement" />
+                <div id="creative-image-check" class="mt-1 text-xs text-zinc-500 min-h-[1em]"></div>
               </label>
               <label class="text-sm">
                 <span class="block text-zinc-400 mb-1">Click URL</span>

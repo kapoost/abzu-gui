@@ -90,6 +90,22 @@
         <p class="persona-desc"><em>Buyer-side operator.</em> Writes a brief in natural language, picks a seller proposal, executes the buy and attaches the creative.</p>
       </div>
 
+      <div class="card p-4 space-y-2">
+        <div class="flex items-center justify-between gap-3">
+          <div>
+            <div class="text-sm font-semibold text-zinc-100">Pick registered plan</div>
+            <div class="text-xs text-zinc-500">Autofills advertiser domain + buy-form plan_id. Register a new one in Jordan tab.</div>
+          </div>
+          <button id="sam-plans-reload" type="button" class="text-xs text-violet-300 hover:text-violet-100 hover:underline">Reload</button>
+        </div>
+        <div class="flex items-center gap-2">
+          <select id="sam-plan-select" class="flex-1 border border-zinc-700 rounded px-2 py-1.5 text-sm">
+            <option value="">— pick a plan —</option>
+          </select>
+          <span id="sam-plan-select-status" class="text-xs text-zinc-500">—</span>
+        </div>
+      </div>
+
       <form id="brief-form" class="grid grid-cols-2 gap-4 card p-5">
         <label class="col-span-1 text-sm">
           <span class="block text-zinc-400 mb-1">Advertiser name</span>
@@ -122,6 +138,10 @@
           <input name="channels" value="display" class="w-full border border-zinc-700 rounded px-2 py-1.5" />
         </label>
         <label class="col-span-1 text-sm">
+          <span class="block text-zinc-400 mb-1">Formats (comma-separated)<details class="helper"><summary>?</summary><div class="helper-body">Creative format IDs passed to sellers as <code>filters.format_ids</code> — signals what dimensions/media the buyer plans to run. Without this, some sellers return empty proposals. Standard IDs live in the creative-agent format registry (e.g. <code>display_300x250</code>, <code>video_hosted</code>). If empty, Abzu derives defaults from channels. <a href="https://adcontextprotocol.org/docs/creative/formats" target="_blank">AdCP formats →</a></div></details></span>
+          <input name="formats" value="display_300x250" class="w-full border border-zinc-700 rounded px-2 py-1.5" />
+        </label>
+        <label class="col-span-1 text-sm">
           <span class="block text-zinc-400 mb-1">Top N proposals</span>
           <input name="top_n" type="number" value="3" min="1" max="20" class="w-full border border-zinc-700 rounded px-2 py-1.5" />
         </label>
@@ -136,7 +156,7 @@
           <span class="status-responding"></span>
           <div>
             <div class="text-sm font-medium text-zinc-100">Abzu is querying sellers…</div>
-            <div id="discovery-progress-detail" class="text-xs text-zinc-500 mt-0.5">Fan-out via <a href="https://adcontextprotocol.org/docs/media-buy/get_products" target="_blank" class="text-violet-400 hover:text-violet-300 underline decoration-violet-500/40">get_products</a> · 5s deadline per seller</div>
+            <div id="discovery-progress-detail" class="text-xs text-zinc-500 mt-0.5">Fan-out via <a href="https://adcontextprotocol.org/docs/media-buy/get_products" target="_blank" class="text-violet-400 hover:text-violet-300 underline decoration-violet-500/40">get_products</a> · 20s deadline per seller</div>
           </div>
         </div>
         <div class="grid grid-cols-2 md:grid-cols-3 gap-2" id="discovery-progress-grid"></div>
@@ -295,6 +315,30 @@
 
       <div id="plan-result" class="hidden text-sm card p-4"></div>
 
+      <div class="card p-5 space-y-3">
+        <div class="flex items-baseline justify-between">
+          <h2 class="text-base font-semibold text-zinc-100">Registered plans</h2>
+          <div class="flex items-center gap-3">
+            <span id="plans-listing-status" class="text-xs text-zinc-500">—</span>
+            <button id="plans-listing-reload" type="button" class="text-xs text-violet-300 hover:text-violet-100 hover:underline">Reload</button>
+          </div>
+        </div>
+        <p class="text-xs text-zinc-500">Every plan synced to the governance agent. Click <em>Load</em> to prefill the form (edit + re-register creates a new revision), or <em>Audit</em> to inspect its check/outcome log below.</p>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead class="text-xs uppercase text-zinc-500 border-b border-zinc-800">
+              <tr>
+                <th class="text-left px-2 py-2 font-medium">Plan</th>
+                <th class="text-left px-2 py-2 font-medium">Brand</th>
+                <th class="text-left px-2 py-2 font-medium">Synced</th>
+                <th class="text-right px-2 py-2 font-medium">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="plans-listing-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+
       <div class="card p-5 space-y-4">
         <div class="flex items-end gap-3">
           <label class="text-sm flex-1">
@@ -352,10 +396,10 @@
           <label>
             <span class="text-zinc-400 mr-1">Status</span>
             <select id="operator-status" class="border border-zinc-700 rounded px-2 py-1">
+              <option value="">all</option>
               <option value="pending_review" selected>pending_review</option>
               <option value="approved">approved</option>
               <option value="rejected">rejected</option>
-              <option value="">all</option>
             </select>
           </label>
           <button id="operator-reload" class="px-3 py-1.5 rounded border border-zinc-700 text-sm hover:bg-zinc-800/30">Reload</button>

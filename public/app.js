@@ -121,19 +121,125 @@ function setLastPlanId(planId) {
   }
 }
 
+let knownPlansCache = [];
+
 async function refreshKnownPlans() {
+  const status = $("#plans-listing-status");
+  const samStatus = $("#sam-plan-select-status");
+  if (status) status.textContent = "loading…";
   try {
     const r = await abzu("/governance/plans");
-    if (!r.ok) return;
-    const dl = $("#known-plans");
-    dl.innerHTML = "";
-    for (const p of r.body?.plans ?? []) {
-      const opt = document.createElement("option");
-      opt.value = p.plan_id;
-      opt.label = p.brand_domain ? `${p.brand_domain} · ${p.synced_at.slice(0, 19)}` : p.synced_at.slice(0, 19);
-      dl.appendChild(opt);
+    if (!r.ok) {
+      if (status) status.textContent = `error · HTTP ${r.status}`;
+      if (samStatus) samStatus.textContent = "unavailable";
+      return;
     }
-  } catch {}
+    const plans = Array.isArray(r.body?.plans) ? r.body.plans : [];
+    knownPlansCache = plans;
+    const dl = $("#known-plans");
+    if (dl) {
+      dl.innerHTML = "";
+      for (const p of plans) {
+        const opt = document.createElement("option");
+        opt.value = p.plan_id;
+        opt.label = p.brand_domain ? `${p.brand_domain} · ${p.synced_at.slice(0, 19)}` : p.synced_at.slice(0, 19);
+        dl.appendChild(opt);
+      }
+    }
+    renderPlansListing(plans);
+    renderSamPlansSelect(plans);
+    if (status) status.textContent = `${plans.length} plan${plans.length === 1 ? "" : "s"} · ${new Date().toLocaleTimeString()}`;
+    if (samStatus) samStatus.textContent = `${plans.length} available`;
+  } catch (err) {
+    if (status) status.textContent = "error";
+    if (samStatus) samStatus.textContent = "unavailable";
+  }
+}
+
+function renderPlansListing(plans) {
+  const tbody = $("#plans-listing-tbody");
+  if (!tbody) return;
+  if (!plans.length) {
+    tbody.innerHTML = `<tr><td colspan="4" class="px-2 py-3 text-zinc-500 text-sm">No plans registered yet. Fill the form above and click <em>Register plan</em>.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = plans.map((p) => {
+    const synced = p.synced_at ? new Date(p.synced_at).toLocaleString() : "—";
+    const brand = p.brand_domain ?? "—";
+    return `<tr class="border-b border-zinc-800 hover:bg-zinc-800/30">
+      <td class="px-2 py-2 font-mono text-xs text-zinc-100">${esc(p.plan_id)}</td>
+      <td class="px-2 py-2 text-zinc-300">${esc(brand)}</td>
+      <td class="px-2 py-2 text-xs text-zinc-500">${esc(synced)}</td>
+      <td class="px-2 py-2 text-right whitespace-nowrap">
+        <button class="plan-load text-xs px-2 py-1 rounded border border-zinc-700 hover:bg-zinc-800/40" data-plan-id="${esc(p.plan_id)}" data-brand-domain="${esc(brand)}">Load</button>
+        <button class="plan-audit text-xs px-2 py-1 rounded border border-zinc-700 hover:bg-zinc-800/40 ml-1" data-plan-id="${esc(p.plan_id)}">Audit</button>
+      </td>
+    </tr>`;
+  }).join("");
+  for (const btn of tbody.querySelectorAll(".plan-load")) {
+    btn.addEventListener("click", () => loadPlanIntoJordanForm(btn.dataset.planId, btn.dataset.brandDomain));
+  }
+  for (const btn of tbody.querySelectorAll(".plan-audit")) {
+    btn.addEventListener("click", () => {
+      const input = $("#audit-plan-id");
+      if (input) input.value = btn.dataset.planId;
+      loadAudit(btn.dataset.planId);
+    });
+  }
+}
+
+function renderSamPlansSelect(plans) {
+  const sel = $("#sam-plan-select");
+  if (!sel) return;
+  const current = sel.value;
+  sel.innerHTML = `<option value="">— pick a plan —</option>` + plans.map((p) => {
+    const label = p.brand_domain
+      ? `${p.plan_id} · ${p.brand_domain}`
+      : p.plan_id;
+    return `<option value="${esc(p.plan_id)}" data-brand-domain="${esc(p.brand_domain ?? "")}">${esc(label)}</option>`;
+  }).join("");
+  if (current && plans.some((p) => p.plan_id === current)) {
+    sel.value = current;
+  } else {
+    const last = getLastPlanId();
+    if (last && plans.some((p) => p.plan_id === last)) sel.value = last;
+  }
+}
+
+function loadPlanIntoJordanForm(planId, brandDomain) {
+  const form = $("#plan-form");
+  if (!form) return;
+  const planIdInput = form.querySelector('[name="plan_id"]');
+  if (planIdInput) planIdInput.value = planId;
+  const brandInput = form.querySelector('[name="brand_domain"]');
+  if (brandInput && brandDomain && brandDomain !== "—") brandInput.value = brandDomain;
+  const auditInput = $("#audit-plan-id");
+  if (auditInput) auditInput.value = planId;
+  setLastPlanId(planId);
+  form.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function applyPlanSelectionToSam(planId) {
+  const plan = knownPlansCache.find((p) => p.plan_id === planId);
+  if (!plan) return;
+  setLastPlanId(planId);
+  const briefForm = $("#brief-form");
+  const advDomain = briefForm?.querySelector('[name="advertiser_domain"]');
+  if (advDomain && plan.brand_domain && !advDomain.dataset.userTouched) {
+    advDomain.value = plan.brand_domain;
+    advDomain.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+  const buyForm = $("#buy-form");
+  if (buyForm) {
+    const planInput = buyForm.querySelector('[name="plan_id"]');
+    if (planInput) planInput.value = planId;
+    const brandDomain = buyForm.querySelector('[name="brand_domain"]');
+    if (brandDomain && plan.brand_domain) brandDomain.value = plan.brand_domain;
+  }
+  patchDemoState({
+    plan_id: planId,
+    ...(plan.brand_domain ? { plan_brand_domain: plan.brand_domain } : {}),
+  });
 }
 
 const brandsByDomain = new Map();
@@ -328,6 +434,10 @@ function bindSam() {
         .split(",")
         .map((s) => s.trim())
         .filter(Boolean),
+      formats: String(fd.get("formats") || "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean),
       top_n: Number(fd.get("top_n") || 3),
     };
     const submitBtn = $("#brief-submit");
@@ -393,6 +503,11 @@ function bindSam() {
       const creativeId = creativeName || `abzu-${Date.now()}`;
       const syncPayload = {
         seller_id: String(fd.get("seller_id") ?? ""),
+        // Wire the just-created buy into sync so Abzu follows up with
+        // update_media_buy(creative_assignments) — without it the seller
+        // never links served impressions back to this media_buy_id, and
+        // delivery pulls return zeros even when the slot is serving.
+        assign_to_media_buy_id: r.body.media_buy.media_buy_id,
         account: {
           brand: { domain: String(fd.get("brand_domain") ?? "") },
           operator: String(fd.get("brand_domain") ?? ""),
@@ -442,9 +557,12 @@ function showDiscoveryProgress() {
   if (!wrap || !grid) return;
   wrap.classList.remove("hidden");
   grid.innerHTML = KNOWN_SELLER_PLACEHOLDERS.map((id, i) => `
-    <div class="seller-card flex items-center gap-2 rounded-md border border-zinc-700 bg-zinc-900/40 px-3 py-2 text-xs" style="--i: ${i}">
-      <span class="status-pending"></span>
-      <span class="font-mono text-zinc-400 truncate">${esc(id)}</span>
+    <div class="seller-card flex items-center justify-between gap-2 rounded-md border border-zinc-700 bg-zinc-900/40 px-3 py-2 text-xs" style="--i: ${i}">
+      <div class="flex items-center min-w-0 flex-1">
+        <span class="status-spinning"></span>
+        <span class="font-mono text-zinc-200 truncate">${esc(id)}</span>
+      </div>
+      <span class="text-[10px] uppercase tracking-wider text-zinc-500">waiting</span>
     </div>
   `).join("");
 }
@@ -483,35 +601,60 @@ function renderDiagnostics(r, elapsedMs) {
   }
 }
 
+/* Turn the raw seller failure into a category the demo audience actually
+ * cares about. Everything used to bucket into "incompatible", which is
+ * misleading: most failures are auth-not-configured or fly cold starts,
+ * not spec mismatches. Categories map to color + short label. */
+function classifySellerFailure(s) {
+  const issues = Array.isArray(s.validation_issues) ? s.validation_issues.join(" | ") : "";
+  const err = String(s.error ?? "");
+  const combined = `${err} ${issues}`.toLowerCase();
+  const detailSource = issues || err;
+
+  if (combined.includes("authentication required") || combined.includes("no oauth metadata") || combined.includes("provide auth_token")) {
+    return { label: "auth", color: "text-sky-400", tooltip: "seller requires OAuth or auth token — none configured in sellers.json", detail: detailSource };
+  }
+  if (combined.includes("failed to discover mcp endpoint")) {
+    return { label: "unreachable", color: "text-zinc-400", tooltip: "MCP endpoint URL invalid — agent_uri doesn't resolve to an MCP server", detail: detailSource };
+  }
+  if (combined.includes("timeout")) {
+    return { label: "timeout", color: "text-amber-400", tooltip: "seller did not respond within the 8s deadline (possibly cold start)", detail: detailSource };
+  }
+  if (combined.includes("version_unsupported") || combined.includes("version '")) {
+    return { label: "version", color: "text-fuchsia-400", tooltip: "AdCP version mismatch — seller does not support 3.1", detail: detailSource };
+  }
+  if (combined.includes("unexpected_keyword_argument") || combined.includes("output validation error") || combined.includes("mcp_error")) {
+    return { label: "protocol", color: "text-orange-400", tooltip: "protocol-level error — seller SDK/schema mismatch", detail: detailSource };
+  }
+  if (combined.includes("validation_failed") || (Array.isArray(s.validation_issues) && s.validation_issues.length > 0)) {
+    return { label: "incompatible", color: "text-rose-400", tooltip: "capabilities response did not validate against 3.1 schema", detail: detailSource };
+  }
+  return { label: "error", color: "text-rose-400", tooltip: err || "unknown failure", detail: detailSource };
+}
+
 function sellerCardHtml(s, i) {
   const isOk = s.ok === true;
-  const errStr = String(s.error || "").toLowerCase();
-  const isTimeout = errStr.includes("timeout") || errStr.includes("capabilities_unreachable");
-  const isValidation = errStr.includes("validation_failed") || (Array.isArray(s.validation_issues) && s.validation_issues.length > 0);
-  let statusClass = "status-done";
-  let statusLabel = "ok";
-  let statusColor = "text-emerald-400";
-  if (!isOk) {
-    if (isTimeout) {
-      statusClass = "status-timeout";
-      statusLabel = "timeout";
-      statusColor = "text-amber-400";
-    } else if (isValidation) {
-      statusClass = "status-error";
-      statusLabel = "incompatible";
-      statusColor = "text-rose-400";
-    } else {
-      statusClass = "status-error";
-      statusLabel = "error";
-      statusColor = "text-rose-400";
-    }
+  let statusClass, statusLabel, statusColor, tooltip = "";
+  let detailText = "";
+  if (isOk) {
+    statusClass = "status-done";
+    statusLabel = "ok";
+    statusColor = "text-emerald-400";
+  } else {
+    const cls = classifySellerFailure(s);
+    statusLabel = cls.label;
+    statusColor = cls.color;
+    tooltip = cls.tooltip;
+    detailText = cls.detail;
+    statusClass = statusLabel === "timeout" ? "status-timeout" : "status-error";
   }
   const productsLine = isOk && (s.products_returned ?? 0) > 0
     ? `<div class="text-xs text-zinc-400 mt-1">${s.products_returned} product${s.products_returned === 1 ? "" : "s"} returned</div>`
     : "";
-  const errLine = !isOk && s.error
-    ? `<div class="text-xs text-zinc-500 mt-1 truncate" title="${esc(s.error)}">${esc(s.error.slice(0, 60))}${s.error.length > 60 ? "…" : ""}</div>`
+  const errLine = !isOk && detailText
+    ? `<div class="text-xs text-zinc-500 mt-1 truncate" title="${esc(detailText)}">${esc(detailText.slice(0, 80))}${detailText.length > 80 ? "…" : ""}</div>`
     : "";
+  const badgeTitle = tooltip ? ` title="${esc(tooltip)}"` : "";
   return `
     <div class="seller-card rounded-md border border-zinc-700 bg-zinc-900/50 px-3 py-2.5" style="--i: ${i}">
       <div class="flex items-center justify-between gap-2">
@@ -519,7 +662,7 @@ function sellerCardHtml(s, i) {
           <span class="${statusClass}"></span>
           <span class="font-mono text-xs text-zinc-200 truncate">${esc(s.seller_id)}</span>
         </div>
-        <span class="text-xs font-semibold ${statusColor} uppercase tracking-wider">${statusLabel}</span>
+        <span${badgeTitle} class="text-xs font-semibold ${statusColor} uppercase tracking-wider">${statusLabel}</span>
       </div>
       ${productsLine}
       ${errLine}
@@ -970,12 +1113,17 @@ function bindOperator() {
 }
 
 function wakeUpSeller() {
-  // fire-and-forget healthz ping so the seller fly machine is hot by the
-  // time the user clicks Discover. cold start adds ~3s to the first brief
-  // otherwise — kills the live "agents respond in 5s" wow moment.
-  fetch("https://seller.purrsonality.rocketscience.pl/.well-known/healthz", {
+  // Fire-and-forget MCP ping so the seller fly machine + its /mcp route
+  // handler are both warm by the time the user clicks Discover. Targeting
+  // /mcp (not /.well-known/healthz) matters because Bun.serve JIT-compiles
+  // per-route on first hit — warming healthz did not warm /mcp on cold
+  // start, and the discovery probe still timed out on first try.
+  fetch("https://seller.purrsonality.rocketscience.pl/mcp", {
+    method: "POST",
     mode: "no-cors",
     cache: "no-store",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", method: "ping", id: 1 }),
   }).catch(() => {});
 }
 
@@ -1032,6 +1180,20 @@ function boot() {
   bindSponsor();
   refreshKnownPlans();
   setInterval(refreshKnownPlans, 15000);
+  $("#plans-listing-reload")?.addEventListener("click", refreshKnownPlans);
+  $("#sam-plans-reload")?.addEventListener("click", refreshKnownPlans);
+  $("#sam-plan-select")?.addEventListener("change", (e) => {
+    const planId = e.target.value;
+    if (planId) applyPlanSelectionToSam(planId);
+  });
+  // User typed into brief's advertiser_domain — mark it so
+  // applyPlanSelectionToSam doesn't overwrite their edits.
+  document.body.addEventListener("input", (e) => {
+    const el = e.target;
+    if (el instanceof HTMLInputElement && el.name === "advertiser_domain") {
+      el.dataset.userTouched = "1";
+    }
+  }, true);
   loadKnownBrands();
   wireBrandAutofill();
   const last = getLastPlanId();

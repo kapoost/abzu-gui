@@ -303,6 +303,24 @@ pre.json {
   0%   { box-shadow: 0 0 0 0 var(--brand-glow); }
   100% { box-shadow: 0 0 0 8px transparent; }
 }
+/* Spinner used per-seller during in-flight discovery. Rotating quarter-arc
+ * conveys "waiting on THIS agent" instead of the ambient pulse of pending.
+ * Kept 10px so it visually reads at the same weight as ✓/✕ badges. */
+.status-spinning::before {
+  content: '';
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1.5px solid var(--text-faint);
+  border-top-color: var(--brand);
+  margin-right: 0.45rem;
+  animation: spinner-rotate 0.9s linear infinite;
+  vertical-align: middle;
+}
+@keyframes spinner-rotate {
+  to { transform: rotate(360deg); }
+}
 .status-done::before {
   content: '✓';
   color: var(--ok);

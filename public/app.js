@@ -148,6 +148,9 @@ async function refreshKnownPlans() {
     }
     renderPlansListing(plans);
     renderSamPlansSelect(plans);
+    renderSponsorCampaignsListing(plans);
+    const sponsorStatus = $("#sponsor-campaigns-status");
+    if (sponsorStatus) sponsorStatus.textContent = `${plans.length} plan${plans.length === 1 ? "" : "s"} · ${new Date().toLocaleTimeString()}`;
     if (status) status.textContent = `${plans.length} plan${plans.length === 1 ? "" : "s"} · ${new Date().toLocaleTimeString()}`;
     if (samStatus) samStatus.textContent = `${plans.length} available`;
   } catch (err) {
@@ -617,8 +620,12 @@ async function executeSingleBuy(fd, override) {
     // media buys would either dedupe on sync or attach one creative to
     // multiple buys, which defeats the per-buy attribution the demo
     // relies on. Suffix with product_id so multi-buy runs stay legible.
+    // creative_id embeds the plan_id so the Sponsor view can attribute
+    // impressions back to a plan without a separate plan_id column on the
+    // seller's creatives table. Sponsor matches on startsWith(planId + "__").
+    const planIdForCreative = String(fd.get("plan_id") ?? "").trim() || "no-plan";
     const creativeIdBase = creativeName || `abzu-${Date.now()}`;
-    const creativeId = `${creativeIdBase}__${override.product_id}`.slice(0, 96);
+    const creativeId = `${planIdForCreative}__${creativeIdBase}__${override.product_id}`.slice(0, 96);
     // Both purrsonality placements are 300x250 rectangles; any other
     // seller/product still defaults here — future custom sizing hooks in
     // per-product policy would live at this line.
@@ -1242,7 +1249,48 @@ function renderConditionsQueue(planId, entries) {
 /* SPONSOR ------------------------------------------------------------ */
 
 function bindSponsor() {
-  $("#sponsor-load")?.addEventListener("click", () => loadSponsor($("#sponsor-plan-id").value));
+  $("#sponsor-campaigns-reload")?.addEventListener("click", refreshKnownPlans);
+}
+
+/* Cached seller creatives — reloaded when Sponsor asks for delivery. Keeps
+ * repeated aggregations cheap and lets multiple planId queries share the
+ * same round-trip. Populated lazily by ensureSellerCreativesLoaded. */
+let sponsorSellerCreativesCache = null;
+
+async function ensureSellerCreativesLoaded(force = false) {
+  if (!force && sponsorSellerCreativesCache) return sponsorSellerCreativesCache;
+  const r = await abzu("/seller/creatives?limit=200");
+  if (!r.ok) throw new Error(`seller creatives fetch failed: HTTP ${r.status}`);
+  sponsorSellerCreativesCache = Array.isArray(r.body?.creatives) ? r.body.creatives : [];
+  return sponsorSellerCreativesCache;
+}
+
+function renderSponsorCampaignsListing(plans) {
+  const tbody = $("#sponsor-campaigns-tbody");
+  if (!tbody) return;
+  if (!plans.length) {
+    tbody.innerHTML = `<tr><td colspan="4" class="px-2 py-3 text-zinc-500 text-sm">No plans registered.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = plans.map((p) => {
+    const synced = p.synced_at ? new Date(p.synced_at).toLocaleString() : "—";
+    const brand = p.brand_domain ?? "—";
+    return `<tr class="border-b border-zinc-800 hover:bg-zinc-800/30">
+      <td class="px-2 py-2 font-mono text-xs text-zinc-100">${esc(p.plan_id)}</td>
+      <td class="px-2 py-2 text-zinc-300">${esc(brand)}</td>
+      <td class="px-2 py-2 text-xs text-zinc-500">${esc(synced)}</td>
+      <td class="px-2 py-2 text-right whitespace-nowrap">
+        <button class="sponsor-delivery text-xs px-2 py-1 rounded border border-zinc-700 hover:bg-zinc-800/40" data-plan-id="${esc(p.plan_id)}">Delivery</button>
+        <button class="sponsor-audit text-xs px-2 py-1 rounded border border-zinc-700 hover:bg-zinc-800/40 ml-1" data-plan-id="${esc(p.plan_id)}">Audit</button>
+      </td>
+    </tr>`;
+  }).join("");
+  for (const btn of tbody.querySelectorAll(".sponsor-audit")) {
+    btn.addEventListener("click", () => loadSponsor(btn.dataset.planId));
+  }
+  for (const btn of tbody.querySelectorAll(".sponsor-delivery")) {
+    btn.addEventListener("click", () => loadSponsorDelivery(btn.dataset.planId));
+  }
 }
 
 async function loadSponsor(planId) {
@@ -1258,9 +1306,15 @@ async function loadSponsor(planId) {
   $('[data-stat="checks"]').textContent = plan?.summary?.checks_performed ?? 0;
   $('[data-stat="outcomes"]').textContent = plan?.summary?.outcomes_reported ?? 0;
   $('[data-stat="status"]').textContent = plan?.status ?? "—";
-  $("#sponsor-timeline-wrap").classList.remove("hidden");
+  const timelineWrap = $("#sponsor-timeline-wrap");
+  timelineWrap?.classList.remove("hidden");
+  const planLabel = $("#sponsor-timeline-plan");
+  if (planLabel) planLabel.textContent = planId;
   const timeline = $("#sponsor-timeline");
   timeline.innerHTML = "";
+  requestAnimationFrame(() =>
+    timelineWrap?.scrollIntoView({ behavior: "smooth", block: "start" }),
+  );
   (plan?.entries || []).forEach((e) => {
     const li = document.createElement("li");
     li.className = "flex items-start gap-3 border-l-2 border-zinc-800 pl-3";
@@ -1273,6 +1327,111 @@ async function loadSponsor(planId) {
     `;
     timeline.appendChild(li);
   });
+}
+
+/* Estimated spend uses the placement's min_cpm: leaderboard-like landing
+ * placement historically 1.0 USD, medium-rectangle result 1.5 USD. Both
+ * placements are 300x250 now but the min_cpm split is retained in seller
+ * config, so this table mirrors it. */
+const SPONSOR_PRODUCT_CPM = {
+  "purr_landing_rectangle_v1": 1.0,
+  "purr_landing_leaderboard_v1": 1.0,
+  "purr_result_card_v1": 1.5,
+};
+
+function inferProductIdFromCreative(creative) {
+  const cid = creative?.creative_id ?? "";
+  if (cid.includes("purr_landing")) return "purr_landing_rectangle_v1";
+  if (cid.includes("purr_result")) return "purr_result_card_v1";
+  const fmtId = creative?.format_id?.id;
+  if (fmtId === "display_728x90") return "purr_landing_leaderboard_v1";
+  return "purr_result_card_v1";
+}
+
+async function loadSponsorDelivery(planId) {
+  if (!planId) return;
+  const wrap = $("#sponsor-delivery-wrap");
+  const totalsEl = $("#sponsor-delivery-totals");
+  const perBuyEl = $("#sponsor-delivery-per-buy");
+  const planLabel = $("#sponsor-delivery-plan");
+  if (planLabel) planLabel.textContent = planId;
+  if (wrap) wrap.classList.remove("hidden");
+  if (totalsEl) totalsEl.innerHTML = `<div class="text-zinc-500 text-sm">Loading…</div>`;
+  if (perBuyEl) perBuyEl.innerHTML = "";
+  requestAnimationFrame(() =>
+    wrap?.scrollIntoView({ behavior: "smooth", block: "start" }),
+  );
+
+  let creatives;
+  try {
+    creatives = await ensureSellerCreativesLoaded(true);
+  } catch (err) {
+    if (totalsEl) totalsEl.innerHTML = `<div class="text-rose-400 text-sm">${esc(err.message)}</div>`;
+    return;
+  }
+
+  // Match creatives whose creative_id carries this plan_id as a prefix
+  // ("<plan_id>__..."). Precise-prefix avoids false hits between plan_ids
+  // that share a substring (e.g. "test" vs "test0"). Both the Sam
+  // single-buy path and the post-deploy seed script now emit
+  // <plan_id>__<name>__<product_id>.
+  const matching = creatives.filter((c) => (c.creative_id || "").startsWith(planId + "__"));
+  const byBuy = new Map();
+  let totalImpr = 0;
+  let totalClicks = 0;
+  let totalSpend = 0;
+  for (const c of matching) {
+    const impr = Number(c?.stats?.impressions ?? 0);
+    const clicks = Number(c?.stats?.clicks ?? 0);
+    const productId = inferProductIdFromCreative(c);
+    const cpm = SPONSOR_PRODUCT_CPM[productId] ?? 1.5;
+    const spend = +(impr * cpm / 1000).toFixed(4);
+    totalImpr += impr;
+    totalClicks += clicks;
+    totalSpend += spend;
+    const buyId = c.assigned_media_buy_id ?? "unassigned";
+    const bucket = byBuy.get(buyId) ?? { buyId, impressions: 0, clicks: 0, spend: 0, creatives: [] };
+    bucket.impressions += impr;
+    bucket.clicks += clicks;
+    bucket.spend += spend;
+    bucket.creatives.push({ id: c.creative_id, impressions: impr, clicks, productId });
+    byBuy.set(buyId, bucket);
+  }
+
+  if (totalsEl) {
+    totalsEl.innerHTML = `
+      <div class="card p-4">
+        <div class="text-xs text-zinc-500">Total impressions</div>
+        <div class="text-lg font-semibold">${totalImpr}</div>
+      </div>
+      <div class="card p-4">
+        <div class="text-xs text-zinc-500">Total clicks</div>
+        <div class="text-lg font-semibold">${totalClicks}</div>
+      </div>
+      <div class="card p-4">
+        <div class="text-xs text-zinc-500">Estimated spend (USD)</div>
+        <div class="text-lg font-semibold">${totalSpend.toFixed(4)}</div>
+      </div>
+    `;
+  }
+
+  if (perBuyEl) {
+    if (byBuy.size === 0) {
+      perBuyEl.innerHTML = `<div class="text-sm text-zinc-500">No creatives found for this plan. Sponsor delivery is inferred from <code>creative_id</code> containing the plan_id — buys made with non-tagged creative names won't roll up here.</div>`;
+    } else {
+      const rows = [...byBuy.values()].map((b) => {
+        const creatives = b.creatives.map((c) => `<li class="font-mono text-xs text-zinc-400">${esc(c.id)} · ${c.impressions} impr · ${c.clicks} clicks</li>`).join("");
+        return `<div class="border border-zinc-800 rounded p-3 space-y-1">
+          <div class="flex items-center justify-between">
+            <div class="font-mono text-xs text-zinc-300">${esc(b.buyId)}</div>
+            <div class="text-xs text-zinc-500">${b.impressions} impressions · ${b.clicks} clicks · $${b.spend.toFixed(4)}</div>
+          </div>
+          <ul class="pl-3 space-y-0.5">${creatives}</ul>
+        </div>`;
+      }).join("");
+      perBuyEl.innerHTML = rows;
+    }
+  }
 }
 
 /* BOOT --------------------------------------------------------------- */
@@ -1400,15 +1559,17 @@ function boot() {
         setTimeout(loadOperatorCreatives, 100);
       }
       if (link.dataset.role === "sponsor") {
-        const planId = getLastPlanId();
-        if (planId) {
-          const input = $("#sponsor-plan-id");
-          if (input && !input.value) input.value = planId;
-          setTimeout(() => {
-            const btn = $("#sponsor-load");
-            if (btn && typeof loadSponsor === "function") loadSponsor(planId);
-          }, 100);
-        }
+        // Sponsor tab always shows the campaigns table (built from the same
+        // refreshKnownPlans feed as Jordan). Auto-open audit + delivery for
+        // the last-used plan so a returning session lands in context.
+        setTimeout(() => {
+          refreshKnownPlans();
+          const planId = getLastPlanId();
+          if (planId) {
+            loadSponsor(planId);
+            loadSponsorDelivery(planId);
+          }
+        }, 100);
       }
     });
   }
@@ -1416,9 +1577,10 @@ function boot() {
   if (role === "sponsor") {
     const planId = getLastPlanId();
     if (planId) {
-      const input = $("#sponsor-plan-id");
-      if (input && !input.value) input.value = planId;
-      setTimeout(() => { if (typeof loadSponsor === "function") loadSponsor(planId); }, 100);
+      setTimeout(() => {
+        loadSponsor(planId);
+        loadSponsorDelivery(planId);
+      }, 100);
     }
   }
   bindSam();

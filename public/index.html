@@ -47,6 +47,29 @@
           </div>
           <h1>Watch agents <span class="accent">negotiate</span> an ad deal — live.</h1>
           <p class="text-sm mt-3 max-w-xl">An end-to-end <a href="https://adcontextprotocol.org" target="_blank" class="text-violet-400 hover:text-violet-300 underline decoration-violet-500/40 underline-offset-2">Ad Context Protocol</a> demo. Four roles, one buy, governance enforced, banner served. Click through Jordan → Sam → Operator → Sponsor.</p>
+          <p class="text-xs mt-2 text-zinc-500">Open source. Repos:
+            <a href="https://github.com/kapoost/abzu-orchestrator" target="_blank" class="text-violet-400 hover:text-violet-300 underline decoration-violet-500/40">abzu-orchestrator</a> ·
+            <a href="https://github.com/kapoost/abzu-gui" target="_blank" class="text-violet-400 hover:text-violet-300 underline decoration-violet-500/40">abzu-gui</a> ·
+            <a href="https://github.com/kapoost/purrsonality-seller-agent" target="_blank" class="text-violet-400 hover:text-violet-300 underline decoration-violet-500/40">purrsonality-seller-agent</a> ·
+            <a href="https://github.com/kapoost/purrsonality-site" target="_blank" class="text-violet-400 hover:text-violet-300 underline decoration-violet-500/40">purrsonality-site</a>
+          </p>
+          <!-- AAO Verified badges — live embeds from agenticadvertising.org.
+               Each links to the agent's registry page so a visitor can
+               inspect the storyboard breakdown that earned the badge. -->
+          <div id="aao-badges" class="mt-4 flex flex-wrap items-center gap-2">
+            <a href="https://agenticadvertising.org/registry/agents/https%3A%2F%2Fapi.rocketscience.pl%2Fmcp" target="_blank" rel="noopener noreferrer">
+              <img src="https://agenticadvertising.org/api/registry/agents/https%3A%2F%2Fapi.rocketscience.pl%2Fmcp/badge/media-buy/3.1.svg" alt="AAO Verified Media Buy Agent 3.1 — Abzu Orchestrator" class="h-5">
+            </a>
+            <a href="https://agenticadvertising.org/registry/agents/https%3A%2F%2Fgovernance.rocketscience.pl%2Fmcp" target="_blank" rel="noopener noreferrer">
+              <img src="https://agenticadvertising.org/api/registry/agents/https%3A%2F%2Fgovernance.rocketscience.pl%2Fmcp/badge/governance/3.1.svg" alt="AAO Verified Governance Agent 3.1 — Abzu Governance" class="h-5">
+            </a>
+            <a href="https://agenticadvertising.org/registry/agents/https%3A%2F%2Fseller.purrsonality.rocketscience.pl%2Fmcp" target="_blank" rel="noopener noreferrer">
+              <img src="https://agenticadvertising.org/api/registry/agents/https%3A%2F%2Fseller.purrsonality.rocketscience.pl%2Fmcp/badge/media-buy/3.0.svg" alt="AAO Verified Media Buy Agent 3.0 — Purrsonality Seller" class="h-5">
+            </a>
+            <a href="https://agenticadvertising.org/registry/agents/https%3A%2F%2Fsignals.purrsonality.rocketscience.pl%2Fmcp" target="_blank" rel="noopener noreferrer">
+              <img src="https://agenticadvertising.org/api/registry/agents/https%3A%2F%2Fsignals.purrsonality.rocketscience.pl%2Fmcp/badge/signals/3.1.svg" alt="AAO Verified Signals Agent 3.1 — Purrsonality Signals" class="h-5">
+            </a>
+          </div>
         </div>
         <!-- 4-step loop diagram -->
         <div class="flex flex-wrap items-center gap-2 lg:justify-end text-xs">
@@ -462,13 +485,27 @@
         <p class="persona-desc"><em>Read-only oversight.</em> Reads the governance ledger per plan: budget burndown, checks history, outcome events. The system of record.</p>
       </div>
 
-      <div class="card p-5">
-        <label class="text-sm block">
-          <span class="block text-zinc-400 mb-1">Plan ID</span>
-          <input id="sponsor-plan-id" list="known-plans" class="plan-input w-full border border-zinc-700 rounded px-2 py-1.5" placeholder="plan_id" />
-        </label>
-        <div class="mt-3 flex justify-end">
-          <button id="sponsor-load" class="btn-primary">Load</button>
+      <div class="card p-5 space-y-3">
+        <div class="flex items-baseline justify-between">
+          <h2 class="text-base font-semibold text-zinc-100">Campaigns</h2>
+          <div class="flex items-center gap-3">
+            <span id="sponsor-campaigns-status" class="text-xs text-zinc-500">—</span>
+            <button id="sponsor-campaigns-reload" type="button" class="text-xs text-violet-300 hover:text-violet-100 hover:underline">Reload</button>
+          </div>
+        </div>
+        <p class="text-xs text-zinc-500">Every governance plan the orchestrator has synced. Click <em>Audit</em> for the ledger, <em>Delivery</em> for aggregated impressions + estimated spend across all creatives registered against this plan.</p>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead class="text-xs uppercase text-zinc-500 border-b border-zinc-800">
+              <tr>
+                <th class="text-left px-2 py-2 font-medium">Plan</th>
+                <th class="text-left px-2 py-2 font-medium">Brand</th>
+                <th class="text-left px-2 py-2 font-medium">Synced</th>
+                <th class="text-right px-2 py-2 font-medium">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="sponsor-campaigns-tbody"></tbody>
+          </table>
         </div>
       </div>
 
@@ -491,13 +528,35 @@
         </div>
       </div>
 
+      <div id="sponsor-delivery-wrap" class="hidden card p-5 space-y-3">
+        <h2 class="text-base font-semibold text-zinc-100">Delivery · <span id="sponsor-delivery-plan" class="font-mono text-sm text-violet-300"></span></h2>
+        <p class="text-xs text-zinc-500">Aggregated across creatives whose <code>creative_id</code> is tagged with this plan. Impressions from the seller ad server (<code>impressions</code> table), spend estimated at the placement's <code>min_cpm</code>.</p>
+        <div id="sponsor-delivery-totals" class="grid grid-cols-3 gap-4"></div>
+        <div id="sponsor-delivery-per-buy" class="space-y-2"></div>
+      </div>
+
       <div id="sponsor-timeline-wrap" class="hidden card p-5">
-        <h2 class="text-base font-semibold text-zinc-50 mb-3">Timeline</h2>
+        <h2 class="text-base font-semibold text-zinc-50 mb-3">Timeline · <span id="sponsor-timeline-plan" class="font-mono text-sm text-violet-300"></span></h2>
         <ol id="sponsor-timeline" class="text-sm space-y-2"></ol>
       </div>
       <div class="next-cta pt-2"><a href="?role=jordan" class="next-link">Loop complete · Restart from Jordan <span aria-hidden>↻</span></a></div>
     </section>
   </main>
+
+  <footer class="border-t border-zinc-800/60 mt-12">
+    <div class="mx-auto max-w-7xl px-6 py-6 flex flex-wrap items-center justify-between gap-3 text-xs text-zinc-500">
+      <div>
+        Built by <a href="https://kapoost.humanmcp.net" target="_blank" class="text-violet-400 hover:text-violet-300 underline decoration-violet-500/40">kapoost</a> — poet, sailor, CTO.
+      </div>
+      <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <a href="https://kapoost.humanmcp.net" target="_blank" class="hover:text-zinc-200">humanMCP · kapoost.humanmcp.net</a>
+        <span class="text-zinc-700">·</span>
+        <a href="https://github.com/kapoost" target="_blank" class="hover:text-zinc-200">GitHub</a>
+        <span class="text-zinc-700">·</span>
+        <a href="mailto:kapoost@gmail.com" class="hover:text-zinc-200">kapoost@gmail.com</a>
+      </div>
+    </div>
+  </footer>
 
   <script src="/app.js"></script>
 </body>

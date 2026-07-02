@@ -126,7 +126,11 @@ async function executeBuy(planId, productId, pricingOptionId) {
 }
 
 async function syncAndAssign(mediaBuyId, placement, creativeId) {
-  const svgUrl = `${SELLER}/generated/agent-creative.svg?brand=${encodeURIComponent(BRAND_NAME)}&product=${encodeURIComponent(placement.productId)}&size=${placement.size}`;
+  // Real bitmap over Lorem Picsum. Seeded on creative_id so re-runs
+  // stay reproducible per placement, and so operator thumbnails render
+  // a recognisable photo instead of an inline SVG that renders blank
+  // in the review panel.
+  const imageUrl = `https://picsum.photos/seed/${encodeURIComponent(creativeId)}/${placement.w}/${placement.h}`;
   return fetchJson(`${ABZU}/creatives/sync`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -139,7 +143,7 @@ async function syncAndAssign(mediaBuyId, placement, creativeId) {
         name: creativeId,
         format_id: { agent_url: "https://creative.adcontextprotocol.org", id: placement.formatId },
         assets: {
-          image: { asset_type: "image", url: svgUrl, width: placement.w, height: placement.h, alt_text: `${BRAND_NAME} — ${placement.key}` },
+          image: { asset_type: "image", url: imageUrl, width: placement.w, height: placement.h, alt_text: `${BRAND_NAME} — ${placement.key}` },
           click_url: { asset_type: "url", url: `https://${BRAND}` },
         },
       }],

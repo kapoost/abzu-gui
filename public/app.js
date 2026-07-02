@@ -1189,24 +1189,24 @@ function renderPersonaCreativeGrid() {
   }).join("");
 }
 
-/* Per-persona routing only works when the seller can read ?persona= from
- * the impression URL — that's the result-slot placement, which maps to
- * product purr_result_card_v1. For any other product we disable persona
- * mode, force single, and explain why in the label. */
+/* Per-persona routing only *serves* through /live/result-slot?persona=<slug>,
+ * which the seller wires to purr_result_card_v1. For other products the
+ * uploaded persona-tagged creatives still sync + get reviewed; they just
+ * won't be persona-routed at impression time (they fall through the normal
+ * bucket rules). We keep the radio clickable and surface the caveat as a
+ * tooltip so the buyer isn't blocked from experimenting on a non-result
+ * product. */
 function syncCreativeModeForProduct(productId) {
   const personaRadio = document.querySelector('input[name="creative_mode"][value="persona"]');
-  const singleRadio = document.querySelector('input[name="creative_mode"][value="single"]');
-  if (!personaRadio || !singleRadio) return;
+  if (!personaRadio) return;
   const personaLabel = personaRadio.closest("label");
   const eligible = productId === "purr_result_card_v1";
-  personaRadio.disabled = !eligible;
+  personaRadio.disabled = false;
   if (personaLabel) {
-    personaLabel.style.opacity = eligible ? "1" : "0.5";
-    personaLabel.title = eligible ? "" : `Per-persona routing needs product purr_result_card_v1 — got ${productId || "empty"}`;
-  }
-  if (!eligible && personaRadio.checked) {
-    singleRadio.checked = true;
-    updateCreativeModeVisibility();
+    personaLabel.style.opacity = "1";
+    personaLabel.title = eligible
+      ? ""
+      : `Only purr_result_card_v1 exposes ?persona= at serve time — persona-tagged creatives will still sync + be reviewed on ${productId || "this product"}, but the seller won't persona-route them.`;
   }
 }
 

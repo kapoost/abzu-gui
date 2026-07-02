@@ -460,6 +460,7 @@ function bindSam() {
 
   $("#buy-cancel")?.addEventListener("click", () => $("#buy-panel").classList.add("hidden"));
   $("#delivery-pull")?.addEventListener("click", pullDelivery);
+  $("#signals-discover")?.addEventListener("click", discoverSignals);
 
   $("#buy-form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -848,6 +849,90 @@ function sellerCardHtml(s, i) {
 
 let currentProposals = [];
 let multiBuyQueue = null;
+
+/* Audience-signals discovery — orchestrator fan-out over every configured
+ * signals agent using the brief text as `get_signals` input. Renders per-
+ * agent diagnostics + ranked segments; auth failures show alongside
+ * successes so the buyer sees which agents responded. */
+async function discoverSignals() {
+  const briefEl = document.querySelector('#brief-form [name="brief"]');
+  const brief = String(briefEl?.value ?? "").trim();
+  const statusEl = $("#signals-status");
+  const diagEl = $("#signals-diagnostics");
+  const resultsEl = $("#signals-results");
+  const btn = $("#signals-discover");
+  if (!brief) {
+    statusEl && (statusEl.textContent = "Write the brief above first, then click Discover signals.");
+    return;
+  }
+  btn && (btn.disabled = true);
+  if (statusEl) statusEl.textContent = "Querying signals agents…";
+  diagEl?.classList.add("hidden");
+  resultsEl?.classList.add("hidden");
+  requestAnimationFrame(() => statusEl?.scrollIntoView({ behavior: "smooth", block: "center" }));
+  const started = Date.now();
+  const r = await abzu("/discovery/signals", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ brief, top_n: 20 }),
+  });
+  const elapsed = ((Date.now() - started) / 1000).toFixed(1);
+  btn && (btn.disabled = false);
+  if (!r.ok) {
+    if (statusEl) statusEl.textContent = `discovery failed — HTTP ${r.status} · ${r.body?.error ?? "unknown"}`;
+    return;
+  }
+  const d = r.body?.diagnostics ?? {};
+  const signals = Array.isArray(r.body?.signals) ? r.body.signals : [];
+  if (statusEl) statusEl.textContent = `${signals.length} signal${signals.length === 1 ? "" : "s"} · ${d.agents_responded ?? 0}/${d.agents_queried ?? 0} agents responded · ${elapsed}s`;
+  if (diagEl) {
+    diagEl.classList.remove("hidden");
+    diagEl.innerHTML = (d.agents ?? []).map((a) => {
+      const ok = a.ok === true;
+      const cls = ok ? "text-emerald-400" : "text-rose-400";
+      const label = ok ? `${a.signals_returned ?? 0} returned` : classifySignalsFailure(a);
+      const tooltip = ok ? "" : ` title="${esc(a.error ?? (a.validation_issues || []).join(" | "))}"`;
+      return `<span${tooltip} class="text-xs px-2 py-1 rounded border border-zinc-700 bg-zinc-900/40"><span class="font-mono text-zinc-300 mr-1">${esc(a.agent_id)}</span><span class="${cls} font-semibold">${esc(label)}</span></span>`;
+    }).join("");
+  }
+  if (resultsEl) {
+    if (signals.length === 0) {
+      resultsEl.classList.remove("hidden");
+      resultsEl.innerHTML = `<div class="text-sm text-zinc-500">No signals returned. Auth or connectivity errors show up in the diagnostics row above.</div>`;
+    } else {
+      resultsEl.classList.remove("hidden");
+      resultsEl.innerHTML = signals.map((s) => {
+        const coverage = typeof s.coverage_percentage === "number"
+          ? `<span class="text-xs text-emerald-300">${s.coverage_percentage.toFixed(1)}% coverage</span>`
+          : "";
+        const provider = s.data_provider ? `<span class="text-xs text-zinc-500">${esc(s.data_provider)}</span>` : "";
+        const type = s.signal_type ? `<span class="text-[10px] uppercase tracking-wider text-violet-300">${esc(s.signal_type)}</span>` : "";
+        return `<div class="border border-zinc-800 rounded p-3 space-y-1">
+          <div class="flex items-center justify-between gap-3">
+            <div class="min-w-0">
+              <div class="flex items-center gap-2 flex-wrap">
+                <span class="font-mono text-xs text-zinc-500">${esc(s.agent_id)}</span>
+                <span class="font-semibold text-zinc-100">${esc(s.name || s.signal_id)}</span>
+                ${type}
+              </div>
+              ${s.description ? `<div class="text-xs text-zinc-400 mt-0.5">${esc(s.description)}</div>` : ""}
+            </div>
+            <div class="text-right whitespace-nowrap flex flex-col gap-0.5 items-end">${coverage}${provider}</div>
+          </div>
+        </div>`;
+      }).join("");
+    }
+  }
+}
+
+function classifySignalsFailure(a) {
+  const msg = String(a.error ?? (a.validation_issues || []).join(" ")).toLowerCase();
+  if (msg.includes("authentication required") || msg.includes("bearer")) return "auth";
+  if (msg.includes("timeout")) return "timeout";
+  if (msg.includes("unreachable") || msg.includes("failed to discover mcp")) return "unreachable";
+  if (msg.includes("version_unsupported")) return "version";
+  return "error";
+}
 
 function renderProposals(body) {
   const wrap = $("#proposals");

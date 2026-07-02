@@ -634,12 +634,14 @@ async function executeSingleBuy(fd, override) {
         bySlug.get(slug)[el.dataset.personaField] = el.value.trim();
       }
       for (const [slug, fields] of bySlug) {
-        const rawImg = fields.image_url ?? "";
-        const image = rawImg || agentCraftedCreativeUrl(brandDomain, override.product_id, fallbackSize);
-        if (!image) continue;
+        // Empty row = skip this persona. Seller falls through to fallback
+        // bucket (or a filled fallback row) — no agent-crafted SVG per
+        // persona because that would emit five identical SVGs.
+        const rawImg = (fields.image_url ?? "").trim();
+        if (!rawImg) continue;
         creativeRows.push({
           slug,
-          image,
+          image: rawImg,
           click_url: fields.click_url ?? "",
           alt_text: fields.alt_text ?? "",
           name_hint: fields.name ?? "",

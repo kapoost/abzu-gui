@@ -461,6 +461,10 @@ function bindSam() {
   $("#buy-cancel")?.addEventListener("click", () => $("#buy-panel").classList.add("hidden"));
   $("#delivery-pull")?.addEventListener("click", pullDelivery);
   $("#signals-discover")?.addEventListener("click", discoverSignals);
+  for (const r of document.querySelectorAll('input[name="creative_mode"]')) {
+    r.addEventListener("change", updateCreativeModeVisibility);
+  }
+  $("#creative-persona-fanout")?.addEventListener("click", fanoutPersonaFirstRow);
 
   $("#buy-form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -605,56 +609,100 @@ async function executeSingleBuy(fd, override) {
   }
 
   let syncRes = null;
-  const rawImageUrl = String(fd.get("creative_image_url") ?? "").trim();
   const brandDomain = String(fd.get("brand_domain") ?? "").trim();
   // Purrsonality's two placements are both 300x250 rectangles now; the
   // 728x90 leaderboard was retired because it overflowed the landing
   // page's mobile-first layout. Kept the branch shape for future
   // re-differentiation on other seller products.
   const fallbackSize = "300x250";
-  const imageUrl = rawImageUrl || agentCraftedCreativeUrl(brandDomain, override.product_id, fallbackSize);
-  if (buyRes.ok && imageUrl && buyRes.body?.media_buy?.media_buy_id) {
-    const clickUrl = String(fd.get("creative_click_url") ?? "").trim();
-    const altText = String(fd.get("creative_alt_text") ?? "").trim();
-    const creativeName = String(fd.get("creative_name") ?? "").trim();
-    // Force unique creative_id per buy — reusing the exact name across
-    // media buys would either dedupe on sync or attach one creative to
-    // multiple buys, which defeats the per-buy attribution the demo
-    // relies on. Suffix with product_id so multi-buy runs stay legible.
-    // creative_id embeds the plan_id so the Sponsor view can attribute
-    // impressions back to a plan without a separate plan_id column on the
-    // seller's creatives table. Sponsor matches on startsWith(planId + "__").
-    const planIdForCreative = String(fd.get("plan_id") ?? "").trim() || "no-plan";
-    const creativeIdBase = creativeName || `abzu-${Date.now()}`;
-    const creativeId = `${planIdForCreative}__${creativeIdBase}__${override.product_id}`.slice(0, 96);
-    // Both purrsonality placements are 300x250 rectangles; any other
-    // seller/product still defaults here — future custom sizing hooks in
-    // per-product policy would live at this line.
-    const creativeFormatId = "display_300x250";
-    const creativeWidth = 300;
-    const creativeHeight = 250;
-    const syncPayload = {
-      seller_id: override.seller_id,
-      assign_to_media_buy_id: buyRes.body.media_buy.media_buy_id,
-      account: {
-        brand: { domain: String(fd.get("brand_domain") ?? "") },
-        operator: String(fd.get("brand_domain") ?? ""),
-      },
-      creatives: [{
+  const creativeFormatId = "display_300x250";
+  const creativeWidth = 300;
+  const creativeHeight = 250;
+  const planIdForCreative = String(fd.get("plan_id") ?? "").trim() || "no-plan";
+  const mode = String(fd.get("creative_mode") ?? "single");
+  // Collect creative rows into a normalized shape before deciding whether to
+  // fire sync_creatives. Empty rows in persona mode silently skip — the seller
+  // uses the fallback bucket for those personas until they get filled in.
+  let creativeRows = [];
+  if (mode === "persona") {
+    const grid = document.getElementById("creative-persona-grid");
+    if (grid && buyRes.ok && buyRes.body?.media_buy?.media_buy_id) {
+      const bySlug = new Map();
+      for (const el of grid.querySelectorAll("input[data-persona-field]")) {
+        const slug = el.dataset.personaSlug;
+        if (!bySlug.has(slug)) bySlug.set(slug, {});
+        bySlug.get(slug)[el.dataset.personaField] = el.value.trim();
+      }
+      for (const [slug, fields] of bySlug) {
+        const rawImg = fields.image_url ?? "";
+        const image = rawImg || agentCraftedCreativeUrl(brandDomain, override.product_id, fallbackSize);
+        if (!image) continue;
+        creativeRows.push({
+          slug,
+          image,
+          click_url: fields.click_url ?? "",
+          alt_text: fields.alt_text ?? "",
+          name_hint: fields.name ?? "",
+        });
+      }
+    }
+  } else {
+    const rawImg = String(fd.get("creative_image_url") ?? "").trim();
+    const image = rawImg || agentCraftedCreativeUrl(brandDomain, override.product_id, fallbackSize);
+    if (buyRes.ok && image && buyRes.body?.media_buy?.media_buy_id) {
+      creativeRows.push({
+        slug: null,
+        image,
+        click_url: String(fd.get("creative_click_url") ?? "").trim(),
+        alt_text: String(fd.get("creative_alt_text") ?? "").trim(),
+        name_hint: String(fd.get("creative_name") ?? "").trim(),
+      });
+    }
+  }
+  if (creativeRows.length > 0) {
+    const creatives = creativeRows.map((row) => {
+      // Force unique creative_id per buy — reusing the exact name across
+      // media buys would either dedupe on sync or attach one creative to
+      // multiple buys, which defeats the per-buy attribution the demo
+      // relies on. creative_id embeds the plan_id so the Sponsor view can
+      // attribute impressions back to a plan without a separate plan_id
+      // column on the seller's creatives table (startsWith match).
+      const base = row.name_hint || `abzu-${Date.now()}`;
+      const slugSuffix = row.slug ? `__${row.slug}` : "";
+      const creativeId = `${planIdForCreative}__${base}__${override.product_id}${slugSuffix}`.slice(0, 96);
+      const image = {
+        asset_type: "image",
+        url: row.image,
+        width: creativeWidth,
+        height: creativeHeight,
+        alt_text: row.alt_text || creativeId,
+      };
+      // Off-protocol convention (schema-legal): assets.image.persona_tag
+      // carries the full signal id so the seller live-slot can route
+      // /live/result-slot?persona=<slug> to the matching creative.
+      // Fallback rows keep the tag empty so they serve the untagged
+      // impressions (no ?persona= query, or an unknown persona).
+      if (row.slug && row.slug !== "fallback") {
+        image.persona_tag = `purr_persona_${row.slug}`;
+      }
+      return {
         creative_id: creativeId,
         name: creativeId,
         format_id: { agent_url: "https://creative.adcontextprotocol.org", id: creativeFormatId },
         assets: {
-          image: {
-            asset_type: "image",
-            url: imageUrl,
-            width: creativeWidth,
-            height: creativeHeight,
-            alt_text: altText || creativeId,
-          },
-          click_url: { asset_type: "url", url: clickUrl || imageUrl },
+          image,
+          click_url: { asset_type: "url", url: row.click_url || row.image },
         },
-      }],
+      };
+    });
+    const syncPayload = {
+      seller_id: override.seller_id,
+      assign_to_media_buy_id: buyRes.body.media_buy.media_buy_id,
+      account: {
+        brand: { domain: brandDomain },
+        operator: brandDomain,
+      },
+      creatives,
     };
     syncRes = await abzu("/creatives/sync", {
       method: "POST",
@@ -850,6 +898,24 @@ function sellerCardHtml(s, i) {
 let currentProposals = [];
 let multiBuyQueue = null;
 
+/* Hardcoded cat persona slugs — mirror of signals.purrsonality.rocketscience.pl
+ * catalog. Used as a fallback when the buyer hasn't run Discover signals yet
+ * so the per-persona creative grid still renders. When Discover signals runs,
+ * discoveredPersonaSlugs overrides these with the live catalog. */
+const FALLBACK_PERSONA_SLUGS = ["angel", "hunter", "tornado", "trickster", "tyrant"];
+let discoveredPersonaSlugs = null;
+
+/* Returns the current persona list — Discover signals results if the buyer
+ * clicked through, otherwise the hardcoded fallback. Slug-only, no `purr_`
+ * prefix — the buyer sees "angel" in the grid, the sync payload adds the
+ * `purr_persona_` prefix for the seller-side tag. */
+function currentPersonaSlugs() {
+  if (Array.isArray(discoveredPersonaSlugs) && discoveredPersonaSlugs.length > 0) {
+    return discoveredPersonaSlugs;
+  }
+  return FALLBACK_PERSONA_SLUGS;
+}
+
 /* Audience-signals discovery — orchestrator fan-out over every configured
  * signals agent using the brief text as `get_signals` input. Renders per-
  * agent diagnostics + ranked segments; auth failures show alongside
@@ -884,6 +950,22 @@ async function discoverSignals() {
   }
   const d = r.body?.diagnostics ?? {};
   const signals = Array.isArray(r.body?.signals) ? r.body.signals : [];
+  // Cache the cat persona subset — purrsonality-signals emits ids like
+  // "purrsonality.rocketscience.pl/purr_persona_trickster" (canonical form),
+  // "purr_persona_trickster" (raw), or the object form; extract the slug so
+  // the per-persona creative grid populates from the live catalog next time
+  // the buyer opens it.
+  const personaSlugs = [];
+  for (const s of signals) {
+    if (s.agent_id !== "purrsonality-signals") continue;
+    const rawId = String(s.signal_id ?? "");
+    const m = rawId.match(/purr_persona_([a-z_-]+)/);
+    if (m && !personaSlugs.includes(m[1])) personaSlugs.push(m[1]);
+  }
+  if (personaSlugs.length > 0) {
+    discoveredPersonaSlugs = personaSlugs;
+    if ($("#creative-persona-grid")) renderPersonaCreativeGrid();
+  }
   if (statusEl) statusEl.textContent = `${signals.length} signal${signals.length === 1 ? "" : "s"} · ${d.agents_responded ?? 0}/${d.agents_queried ?? 0} agents responded · ${elapsed}s`;
   if (diagEl) {
     diagEl.classList.remove("hidden");
@@ -1061,7 +1143,102 @@ function openBuyPanel(proposal) {
   if (!f.plan_id.value) {
     f.plan_id.value = getLastPlanId() || `plan_${Date.now()}`;
   }
+  // Ensure persona grid is populated when the panel opens (works even if
+  // the buyer never ran Discover signals — falls back to hardcoded slugs).
+  renderPersonaCreativeGrid();
+  // Per-persona routing only makes sense on purr_result_card_v1 (where the
+  // cats /r/[persona] page passes ?persona=<slug>). For any other product
+  // the persona radio is disabled + we force single mode; label explains why.
+  syncCreativeModeForProduct(proposal.product?.product_id ?? "");
   panel.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+/* Rebuild the per-persona creative grid rows in place. Called from
+ * openBuyPanel and whenever discoveredPersonaSlugs changes. Rows preserve
+ * their current input values so the buyer doesn't lose typing when the
+ * grid re-renders after a Discover signals click. */
+function renderPersonaCreativeGrid() {
+  const grid = document.getElementById("creative-persona-grid");
+  if (!grid) return;
+  const priorValues = new Map();
+  for (const el of grid.querySelectorAll("input[data-persona-field]")) {
+    const key = `${el.dataset.personaSlug}__${el.dataset.personaField}`;
+    priorValues.set(key, el.value);
+  }
+  const rows = [...currentPersonaSlugs(), "fallback"];
+  grid.innerHTML = rows.map((slug) => {
+    const isFallback = slug === "fallback";
+    const label = isFallback
+      ? `<span class="text-zinc-500 uppercase tracking-wider text-[10px]">fallback</span>`
+      : `<span class="text-violet-300 font-mono text-xs">${esc(slug)}</span>`;
+    const tag = isFallback
+      ? `<span class="text-[10px] text-zinc-600">no tag</span>`
+      : `<span class="text-[10px] text-zinc-500 font-mono">purr_persona_${esc(slug)}</span>`;
+    const val = (field) => esc(priorValues.get(`${slug}__${field}`) ?? "");
+    return `<div class="grid grid-cols-[80px_1fr_1fr] gap-2 items-start p-2 rounded border border-zinc-800 bg-zinc-900/40">
+      <div class="text-xs pt-1.5 space-y-0.5">${label}<div>${tag}</div></div>
+      <div class="grid grid-cols-2 gap-2 col-span-2">
+        <input type="url" placeholder="Image URL" data-persona-field="image_url" data-persona-slug="${esc(slug)}" value="${val("image_url")}" class="w-full border border-zinc-700 rounded px-2 py-1 text-xs" />
+        <input type="url" placeholder="Click URL" data-persona-field="click_url" data-persona-slug="${esc(slug)}" value="${val("click_url")}" class="w-full border border-zinc-700 rounded px-2 py-1 text-xs" />
+        <input placeholder="Alt text" data-persona-field="alt_text" data-persona-slug="${esc(slug)}" value="${val("alt_text")}" class="w-full border border-zinc-700 rounded px-2 py-1 text-xs" />
+        <input placeholder="Creative name" data-persona-field="name" data-persona-slug="${esc(slug)}" value="${val("name")}" class="w-full border border-zinc-700 rounded px-2 py-1 text-xs" />
+      </div>
+    </div>`;
+  }).join("");
+}
+
+/* Per-persona routing only works when the seller can read ?persona= from
+ * the impression URL — that's the result-slot placement, which maps to
+ * product purr_result_card_v1. For any other product we disable persona
+ * mode, force single, and explain why in the label. */
+function syncCreativeModeForProduct(productId) {
+  const personaRadio = document.querySelector('input[name="creative_mode"][value="persona"]');
+  const singleRadio = document.querySelector('input[name="creative_mode"][value="single"]');
+  if (!personaRadio || !singleRadio) return;
+  const personaLabel = personaRadio.closest("label");
+  const eligible = productId === "purr_result_card_v1";
+  personaRadio.disabled = !eligible;
+  if (personaLabel) {
+    personaLabel.style.opacity = eligible ? "1" : "0.5";
+    personaLabel.title = eligible ? "" : `Per-persona routing needs product purr_result_card_v1 — got ${productId || "empty"}`;
+  }
+  if (!eligible && personaRadio.checked) {
+    singleRadio.checked = true;
+    updateCreativeModeVisibility();
+  }
+}
+
+/* Toggle the single-vs-persona sub-panels based on the currently checked
+ * radio. Idempotent — safe to call from radio change + from openBuyPanel. */
+function updateCreativeModeVisibility() {
+  const mode = document.querySelector('input[name="creative_mode"]:checked')?.value ?? "single";
+  const single = document.getElementById("creative-single");
+  const persona = document.getElementById("creative-persona");
+  if (single) single.classList.toggle("hidden", mode !== "single");
+  if (persona) persona.classList.toggle("hidden", mode !== "persona");
+}
+
+/* "Fill from first row" — mirrors the first persona row's inputs into every
+ * other persona row + the fallback. Łukasz's sensible default from the
+ * humanmcp narada: buyer uploads one banner, gets diversifiable defaults. */
+function fanoutPersonaFirstRow() {
+  const grid = document.getElementById("creative-persona-grid");
+  if (!grid) return;
+  const rows = new Map();
+  for (const el of grid.querySelectorAll("input[data-persona-field]")) {
+    const slug = el.dataset.personaSlug;
+    if (!rows.has(slug)) rows.set(slug, {});
+    rows.get(slug)[el.dataset.personaField] = el;
+  }
+  const [firstSlug] = rows.keys();
+  if (!firstSlug) return;
+  const src = rows.get(firstSlug);
+  for (const [slug, fields] of rows) {
+    if (slug === firstSlug) continue;
+    for (const field of ["image_url", "click_url", "alt_text", "name"]) {
+      if (fields[field] && src[field]) fields[field].value = src[field].value;
+    }
+  }
 }
 
 let lastBuyContext = null;

@@ -274,8 +274,18 @@
             <span>Accept governance conditions (required when verdict=conditions)</span>
           </label>
           <fieldset class="col-span-2 border border-zinc-800 rounded p-3 space-y-2">
-            <legend class="text-xs text-zinc-500 px-1">Creative — pushed via <code>sync_creatives</code> after the buy; lands in the seller's review queue<details class="helper"><summary>?</summary><div class="helper-body">After a successful <code>create_media_buy</code>, Abzu calls <code>sync_creatives</code> on the same seller with the assets you provide. Sandbox principals auto-approve; live principals (Abzu included) land in <code>pending_review</code> until an operator approves. <a href="https://adcontextprotocol.org/docs/media-buy/sync_creatives" target="_blank">AdCP spec →</a></div></details></legend>
-            <div class="grid grid-cols-2 gap-3">
+            <legend class="text-xs text-zinc-500 px-1">Creative — pushed via <code>sync_creatives</code> after the buy; lands in the seller's review queue<details class="helper"><summary>?</summary><div class="helper-body">After a successful <code>create_media_buy</code>, Abzu calls <code>sync_creatives</code> on the same seller with the assets you provide. Sandbox principals auto-approve; live principals (Abzu included) land in <code>pending_review</code> until an operator approves. Per-persona mode uploads one banner per cat persona plus a fallback; seller routes on <code>/live/result-slot?persona=&lt;slug&gt;</code>. <a href="https://adcontextprotocol.org/docs/media-buy/sync_creatives" target="_blank">AdCP spec →</a></div></details></legend>
+            <div class="flex flex-wrap gap-4 text-sm">
+              <label class="flex items-center gap-2 cursor-pointer">
+                <input type="radio" name="creative_mode" value="single" checked />
+                <span>Single creative</span>
+              </label>
+              <label class="flex items-center gap-2 cursor-pointer">
+                <input type="radio" name="creative_mode" value="persona" />
+                <span>Per-persona routing <span class="text-zinc-500">(result placement · 5 personas + fallback)</span></span>
+              </label>
+            </div>
+            <div id="creative-single" class="grid grid-cols-2 gap-3">
               <label class="text-sm">
                 <span class="block text-zinc-400 mb-1">Image URL <span class="text-zinc-500">(PNG/JPG/WEBP/GIF — leave empty for agent-crafted SVG)</span></span>
                 <input id="creative-image-url" name="creative_image_url" type="url" class="w-full border border-zinc-700 rounded px-2 py-1.5" placeholder="empty → seller renders a branded SVG for the placement" />
@@ -294,7 +304,14 @@
                 <input name="creative_name" class="w-full border border-zinc-700 rounded px-2 py-1.5" placeholder="acme-display-300x250-v1" />
               </label>
             </div>
-            <p class="text-xs text-zinc-500">Leave Image URL empty to skip creative sync (buy only). Hosting is buyer-side — paste any reachable URL.</p>
+            <div id="creative-persona" class="hidden space-y-2">
+              <div class="flex items-baseline justify-between">
+                <p class="text-xs text-zinc-500">One banner per cat persona plus a fallback for users without a quiz result. Empty rows fall through to fallback at serve time.</p>
+                <button type="button" id="creative-persona-fanout" class="text-xs text-violet-400 hover:text-violet-300 underline">Fill from first row →</button>
+              </div>
+              <div id="creative-persona-grid" class="space-y-2"></div>
+            </div>
+            <p class="text-xs text-zinc-500">Hosting is buyer-side — paste any reachable URL. Empty rows skip the sync for that persona.</p>
           </fieldset>
           <div class="col-span-2 flex justify-end gap-2">
             <button type="button" id="buy-cancel" class="px-4 py-2 rounded border border-zinc-700 text-sm">Cancel</button>

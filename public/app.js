@@ -464,7 +464,7 @@ function bindSam() {
   for (const r of document.querySelectorAll('input[name="creative_mode"]')) {
     r.addEventListener("change", updateCreativeModeVisibility);
   }
-  $("#creative-persona-fanout")?.addEventListener("click", fanoutPersonaFirstRow);
+  $("#creative-audience-fanout")?.addEventListener("click", fanoutAudienceFirstRow);
 
   $("#buy-form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -621,22 +621,22 @@ async function executeSingleBuy(fd, override) {
   const planIdForCreative = String(fd.get("plan_id") ?? "").trim() || "no-plan";
   const mode = String(fd.get("creative_mode") ?? "single");
   // Collect creative rows into a normalized shape before deciding whether to
-  // fire sync_creatives. Empty rows in persona mode silently skip — the seller
-  // uses the fallback bucket for those personas until they get filled in.
+  // fire sync_creatives. Empty rows in audience mode silently skip — the seller
+  // uses the fallback bucket for those audiences until they get filled in.
   let creativeRows = [];
-  if (mode === "persona") {
-    const grid = document.getElementById("creative-persona-grid");
+  if (mode === "audience") {
+    const grid = document.getElementById("creative-audience-grid");
     if (grid && buyRes.ok && buyRes.body?.media_buy?.media_buy_id) {
       const bySlug = new Map();
-      for (const el of grid.querySelectorAll("input[data-persona-field]")) {
-        const slug = el.dataset.personaSlug;
+      for (const el of grid.querySelectorAll("input[data-audience-field]")) {
+        const slug = el.dataset.audienceSlug;
         if (!bySlug.has(slug)) bySlug.set(slug, {});
-        bySlug.get(slug)[el.dataset.personaField] = el.value.trim();
+        bySlug.get(slug)[el.dataset.audienceField] = el.value.trim();
       }
       for (const [slug, fields] of bySlug) {
-        // Empty row = skip this persona. Seller falls through to fallback
+        // Empty row = skip this audience. Seller falls through to fallback
         // bucket (or a filled fallback row) — no agent-crafted SVG per
-        // persona because that would emit five identical SVGs.
+        // audience because that would emit N identical SVGs.
         const rawImg = (fields.image_url ?? "").trim();
         if (!rawImg) continue;
         creativeRows.push({
@@ -679,13 +679,13 @@ async function executeSingleBuy(fd, override) {
         height: creativeHeight,
         alt_text: row.alt_text || creativeId,
       };
-      // Off-protocol convention (schema-legal): assets.image.persona_tag
+      // Off-protocol convention (schema-legal): assets.image.audience_tag
       // carries the full signal id so the seller live-slot can route
-      // /live/result-slot?persona=<slug> to the matching creative.
+      // /live/result-slot?audience=<slug> to the matching creative.
       // Fallback rows keep the tag empty so they serve the untagged
-      // impressions (no ?persona= query, or an unknown persona).
+      // impressions (no ?audience= query, or an unknown audience).
       if (row.slug && row.slug !== "fallback") {
-        image.persona_tag = `purr_persona_${row.slug}`;
+        image.audience_tag = `purr_persona_${row.slug}`;
       }
       return {
         creative_id: creativeId,
@@ -902,20 +902,20 @@ let multiBuyQueue = null;
 
 /* Hardcoded cat persona slugs — mirror of signals.purrsonality.rocketscience.pl
  * catalog. Used as a fallback when the buyer hasn't run Discover signals yet
- * so the per-persona creative grid still renders. When Discover signals runs,
- * discoveredPersonaSlugs overrides these with the live catalog. */
-const FALLBACK_PERSONA_SLUGS = ["angel", "hunter", "tornado", "trickster", "tyrant"];
-let discoveredPersonaSlugs = null;
+ * so the per-audience creative grid still renders. When Discover signals runs,
+ * discoveredAudienceSlugs overrides these with the live catalog. */
+const FALLBACK_AUDIENCE_SLUGS = ["angel", "hunter", "tornado", "trickster", "tyrant"];
+let discoveredAudienceSlugs = null;
 
-/* Returns the current persona list — Discover signals results if the buyer
+/* Returns the current audience segment list — Discover signals results if the buyer
  * clicked through, otherwise the hardcoded fallback. Slug-only, no `purr_`
  * prefix — the buyer sees "angel" in the grid, the sync payload adds the
  * `purr_persona_` prefix for the seller-side tag. */
-function currentPersonaSlugs() {
-  if (Array.isArray(discoveredPersonaSlugs) && discoveredPersonaSlugs.length > 0) {
-    return discoveredPersonaSlugs;
+function currentAudienceSlugs() {
+  if (Array.isArray(discoveredAudienceSlugs) && discoveredAudienceSlugs.length > 0) {
+    return discoveredAudienceSlugs;
   }
-  return FALLBACK_PERSONA_SLUGS;
+  return FALLBACK_AUDIENCE_SLUGS;
 }
 
 /* Audience-signals discovery — orchestrator fan-out over every configured
@@ -955,18 +955,18 @@ async function discoverSignals() {
   // Cache the cat persona subset — purrsonality-signals emits ids like
   // "purrsonality.rocketscience.pl/purr_persona_trickster" (canonical form),
   // "purr_persona_trickster" (raw), or the object form; extract the slug so
-  // the per-persona creative grid populates from the live catalog next time
+  // the per-audience creative grid populates from the live catalog next time
   // the buyer opens it.
-  const personaSlugs = [];
+  const audienceSlugs = [];
   for (const s of signals) {
     if (s.agent_id !== "purrsonality-signals") continue;
     const rawId = String(s.signal_id ?? "");
     const m = rawId.match(/purr_persona_([a-z_-]+)/);
-    if (m && !personaSlugs.includes(m[1])) personaSlugs.push(m[1]);
+    if (m && !audienceSlugs.includes(m[1])) audienceSlugs.push(m[1]);
   }
-  if (personaSlugs.length > 0) {
-    discoveredPersonaSlugs = personaSlugs;
-    if ($("#creative-persona-grid")) renderPersonaCreativeGrid();
+  if (audienceSlugs.length > 0) {
+    discoveredAudienceSlugs = audienceSlugs;
+    if ($("#creative-audience-grid")) renderAudienceCreativeGrid();
   }
   if (statusEl) statusEl.textContent = `${signals.length} signal${signals.length === 1 ? "" : "s"} · ${d.agents_responded ?? 0}/${d.agents_queried ?? 0} agents responded · ${elapsed}s`;
   if (diagEl) {
@@ -1145,29 +1145,30 @@ function openBuyPanel(proposal) {
   if (!f.plan_id.value) {
     f.plan_id.value = getLastPlanId() || `plan_${Date.now()}`;
   }
-  // Ensure persona grid is populated when the panel opens (works even if
+  // Ensure audience grid is populated when the panel opens (works even if
   // the buyer never ran Discover signals — falls back to hardcoded slugs).
-  renderPersonaCreativeGrid();
-  // Per-persona routing only makes sense on purr_result_card_v1 (where the
-  // cats /r/[persona] page passes ?persona=<slug>). For any other product
-  // the persona radio is disabled + we force single mode; label explains why.
+  renderAudienceCreativeGrid();
+  // Per-audience routing only *serves* on purr_result_card_v1 (where the
+  // cats /r/[persona] page passes ?persona=<slug>). Other products still
+  // sync the tagged creatives, they just aren't audience-routed at serve
+  // time; the tooltip on the radio explains why.
   syncCreativeModeForProduct(proposal.product?.product_id ?? "");
   panel.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-/* Rebuild the per-persona creative grid rows in place. Called from
- * openBuyPanel and whenever discoveredPersonaSlugs changes. Rows preserve
+/* Rebuild the per-audience creative grid rows in place. Called from
+ * openBuyPanel and whenever discoveredAudienceSlugs changes. Rows preserve
  * their current input values so the buyer doesn't lose typing when the
  * grid re-renders after a Discover signals click. */
-function renderPersonaCreativeGrid() {
-  const grid = document.getElementById("creative-persona-grid");
+function renderAudienceCreativeGrid() {
+  const grid = document.getElementById("creative-audience-grid");
   if (!grid) return;
   const priorValues = new Map();
-  for (const el of grid.querySelectorAll("input[data-persona-field]")) {
-    const key = `${el.dataset.personaSlug}__${el.dataset.personaField}`;
+  for (const el of grid.querySelectorAll("input[data-audience-field]")) {
+    const key = `${el.dataset.audienceSlug}__${el.dataset.audienceField}`;
     priorValues.set(key, el.value);
   }
-  const rows = [...currentPersonaSlugs(), "fallback"];
+  const rows = [...currentAudienceSlugs(), "fallback"];
   grid.innerHTML = rows.map((slug) => {
     const isFallback = slug === "fallback";
     const label = isFallback
@@ -1180,57 +1181,57 @@ function renderPersonaCreativeGrid() {
     return `<div class="grid grid-cols-[80px_1fr_1fr] gap-2 items-start p-2 rounded border border-zinc-800 bg-zinc-900/40">
       <div class="text-xs pt-1.5 space-y-0.5">${label}<div>${tag}</div></div>
       <div class="grid grid-cols-2 gap-2 col-span-2">
-        <input type="url" placeholder="Image URL" data-persona-field="image_url" data-persona-slug="${esc(slug)}" value="${val("image_url")}" class="w-full border border-zinc-700 rounded px-2 py-1 text-xs" />
-        <input type="url" placeholder="Click URL" data-persona-field="click_url" data-persona-slug="${esc(slug)}" value="${val("click_url")}" class="w-full border border-zinc-700 rounded px-2 py-1 text-xs" />
-        <input placeholder="Alt text" data-persona-field="alt_text" data-persona-slug="${esc(slug)}" value="${val("alt_text")}" class="w-full border border-zinc-700 rounded px-2 py-1 text-xs" />
-        <input placeholder="Creative name" data-persona-field="name" data-persona-slug="${esc(slug)}" value="${val("name")}" class="w-full border border-zinc-700 rounded px-2 py-1 text-xs" />
+        <input type="url" placeholder="Image URL" data-audience-field="image_url" data-audience-slug="${esc(slug)}" value="${val("image_url")}" class="w-full border border-zinc-700 rounded px-2 py-1 text-xs" />
+        <input type="url" placeholder="Click URL" data-audience-field="click_url" data-audience-slug="${esc(slug)}" value="${val("click_url")}" class="w-full border border-zinc-700 rounded px-2 py-1 text-xs" />
+        <input placeholder="Alt text" data-audience-field="alt_text" data-audience-slug="${esc(slug)}" value="${val("alt_text")}" class="w-full border border-zinc-700 rounded px-2 py-1 text-xs" />
+        <input placeholder="Creative name" data-audience-field="name" data-audience-slug="${esc(slug)}" value="${val("name")}" class="w-full border border-zinc-700 rounded px-2 py-1 text-xs" />
       </div>
     </div>`;
   }).join("");
 }
 
-/* Per-persona routing only *serves* through /live/result-slot?persona=<slug>,
+/* Per-audience routing only *serves* through /live/result-slot?audience=<slug>,
  * which the seller wires to purr_result_card_v1. For other products the
- * uploaded persona-tagged creatives still sync + get reviewed; they just
- * won't be persona-routed at impression time (they fall through the normal
+ * uploaded audience-tagged creatives still sync + get reviewed; they just
+ * won't be audience-routed at impression time (they fall through the normal
  * bucket rules). We keep the radio clickable and surface the caveat as a
  * tooltip so the buyer isn't blocked from experimenting on a non-result
  * product. */
 function syncCreativeModeForProduct(productId) {
-  const personaRadio = document.querySelector('input[name="creative_mode"][value="persona"]');
-  if (!personaRadio) return;
-  const personaLabel = personaRadio.closest("label");
+  const audienceRadio = document.querySelector('input[name="creative_mode"][value="audience"]');
+  if (!audienceRadio) return;
+  const audienceLabel = audienceRadio.closest("label");
   const eligible = productId === "purr_result_card_v1";
-  personaRadio.disabled = false;
-  if (personaLabel) {
-    personaLabel.style.opacity = "1";
-    personaLabel.title = eligible
+  audienceRadio.disabled = false;
+  if (audienceLabel) {
+    audienceLabel.style.opacity = "1";
+    audienceLabel.title = eligible
       ? ""
-      : `Only purr_result_card_v1 exposes ?persona= at serve time — persona-tagged creatives will still sync + be reviewed on ${productId || "this product"}, but the seller won't persona-route them.`;
+      : `Only purr_result_card_v1 exposes ?audience= at serve time — audience-tagged creatives will still sync + be reviewed on ${productId || "this product"}, but the seller won't audience-route them.`;
   }
 }
 
-/* Toggle the single-vs-persona sub-panels based on the currently checked
+/* Toggle the single-vs-audience sub-panels based on the currently checked
  * radio. Idempotent — safe to call from radio change + from openBuyPanel. */
 function updateCreativeModeVisibility() {
   const mode = document.querySelector('input[name="creative_mode"]:checked')?.value ?? "single";
   const single = document.getElementById("creative-single");
-  const persona = document.getElementById("creative-persona");
+  const audience = document.getElementById("creative-audience");
   if (single) single.classList.toggle("hidden", mode !== "single");
-  if (persona) persona.classList.toggle("hidden", mode !== "persona");
+  if (audience) audience.classList.toggle("hidden", mode !== "audience");
 }
 
-/* "Fill from first row" — mirrors the first persona row's inputs into every
- * other persona row + the fallback. Łukasz's sensible default from the
+/* "Fill from first row" — mirrors the first audience row's inputs into every
+ * other audience row + the fallback. Łukasz's sensible default from the
  * humanmcp narada: buyer uploads one banner, gets diversifiable defaults. */
-function fanoutPersonaFirstRow() {
-  const grid = document.getElementById("creative-persona-grid");
+function fanoutAudienceFirstRow() {
+  const grid = document.getElementById("creative-audience-grid");
   if (!grid) return;
   const rows = new Map();
-  for (const el of grid.querySelectorAll("input[data-persona-field]")) {
-    const slug = el.dataset.personaSlug;
+  for (const el of grid.querySelectorAll("input[data-audience-field]")) {
+    const slug = el.dataset.audienceSlug;
     if (!rows.has(slug)) rows.set(slug, {});
-    rows.get(slug)[el.dataset.personaField] = el;
+    rows.get(slug)[el.dataset.audienceField] = el;
   }
   const [firstSlug] = rows.keys();
   if (!firstSlug) return;

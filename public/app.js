@@ -38,7 +38,7 @@ async function probeAbzu() {
 const DEMO_STATE_KEY = "abzu.demoState";
 const LAST_PLAN_KEY = "abzu.lastPlanId";
 
-/* Shared demo state — the linear thread through Jordan → Sam → Operator → Sponsor.
+/* Shared demo state — the linear thread through Jordan → Sam → Riley → Taylor.
  * Each tab's success action writes to it, and every tab's breadcrumb + auto-fill
  * reads from it. Keys never expire; "Reset demo" clears them. */
 function getDemoState() {
@@ -466,6 +466,15 @@ function bindSam() {
   }
   $("#creative-audience-fanout")?.addEventListener("click", fanoutAudienceFirstRow);
   $("#signals-results")?.addEventListener("change", onSignalSelectionChange);
+  // Live update of the "empty → default X" hint. Same handler covers
+  // single-mode fields and per-audience-mode grid inputs (delegated on
+  // the buy-form container so late-rendered rows still fire it).
+  const buyForm = $("#buy-form");
+  if (buyForm) {
+    buyForm.addEventListener("input", updateCreativeDefaultsHint);
+    buyForm.addEventListener("change", updateCreativeDefaultsHint);
+  }
+  updateCreativeDefaultsHint();
 
   $("#buy-form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -579,6 +588,57 @@ function agentCraftedCreativeUrl(brand, productId, size) {
     size: size || "300x250",
   });
   return `${seller}/generated/agent-creative.svg?${qs.toString()}`;
+}
+
+/* Default landing page for empty Click URL — pointed at rocketscience.pl
+ * rather than the image URL itself so the ad never opens the raw asset
+ * in a new tab when clicked. */
+const DEFAULT_CLICK_URL = "https://rocketscience.pl/";
+
+/* Live hint under the Creative fieldset explaining what defaults will
+ * apply on submit. Debounces on input events so it feels responsive
+ * without churning DOM on every keystroke. Persona / audience mode uses
+ * the same defaults per row — the hint stays valid there too. */
+function updateCreativeDefaultsHint() {
+  const hint = document.getElementById("creative-defaults-hint");
+  if (!hint) return;
+  const mode = document.querySelector('input[name="creative_mode"]:checked')?.value ?? "single";
+  const missing = [];
+  if (mode === "single") {
+    const img = document.querySelector('#creative-single input[name="creative_image_url"]')?.value?.trim();
+    const click = document.querySelector('#creative-single input[name="creative_click_url"]')?.value?.trim();
+    const alt = document.querySelector('#creative-single input[name="creative_alt_text"]')?.value?.trim();
+    const name = document.querySelector('#creative-single input[name="creative_name"]')?.value?.trim();
+    if (!img) missing.push("Image → generic seller-crafted SVG");
+    if (!click) missing.push(`Click → ${DEFAULT_CLICK_URL}`);
+    if (!alt) missing.push("Alt text → auto-generated from creative name");
+    if (!name) missing.push("Creative name → auto-generated abzu-&lt;timestamp&gt;");
+  } else {
+    const grid = document.getElementById("creative-audience-grid");
+    if (grid) {
+      let rowsWithImage = 0;
+      let rowsWithoutClick = 0;
+      for (const row of grid.querySelectorAll("div.grid.grid-cols-\\[160px_1fr_1fr\\]")) {
+        const img = row.querySelector('input[data-audience-field="image_url"]')?.value?.trim();
+        if (!img) continue;
+        rowsWithImage++;
+        const click = row.querySelector('input[data-audience-field="click_url"]')?.value?.trim();
+        if (!click) rowsWithoutClick++;
+      }
+      if (rowsWithImage === 0) {
+        missing.push("no rows have Image URL — the buy will succeed but no creatives sync");
+      } else if (rowsWithoutClick > 0) {
+        missing.push(`${rowsWithoutClick} rows will use Click → ${DEFAULT_CLICK_URL}`);
+      }
+    }
+  }
+  if (missing.length === 0) {
+    hint.classList.add("hidden");
+    hint.innerHTML = "";
+    return;
+  }
+  hint.classList.remove("hidden");
+  hint.innerHTML = `Empty fields will use defaults: <span class="text-amber-100">${missing.join(" · ")}</span>`;
 }
 
 async function executeSingleBuy(fd, override) {
@@ -704,7 +764,7 @@ async function executeSingleBuy(fd, override) {
         format_id: { agent_url: "https://creative.adcontextprotocol.org", id: creativeFormatId },
         assets: {
           image,
-          click_url: { asset_type: "url", url: row.click_url || row.image },
+          click_url: { asset_type: "url", url: row.click_url || DEFAULT_CLICK_URL },
         },
       };
     });
@@ -1198,6 +1258,7 @@ function openBuyPanel(proposal) {
   // sync the tagged creatives, they just aren't audience-routed at serve
   // time; the tooltip on the radio explains why.
   syncCreativeModeForProduct(proposal.product?.product_id ?? "");
+  updateCreativeDefaultsHint();
   panel.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
@@ -1736,7 +1797,7 @@ async function loadSponsorDelivery(planId) {
 
   if (perBuyEl) {
     if (byBuy.size === 0) {
-      perBuyEl.innerHTML = `<div class="text-sm text-zinc-500">No creatives found for this plan. Sponsor delivery is inferred from <code>creative_id</code> containing the plan_id — buys made with non-tagged creative names won't roll up here.</div>`;
+      perBuyEl.innerHTML = `<div class="text-sm text-zinc-500">No creatives found for this plan. Delivery is inferred from <code>creative_id</code> containing the plan_id — buys made with non-tagged creative names won't roll up here.</div>`;
     } else {
       const rows = [...byBuy.values()].map((b) => {
         const creatives = b.creatives.map((c) => `<li class="font-mono text-xs text-zinc-400">${esc(c.id)} · ${c.impressions} impr · ${c.clicks} clicks</li>`).join("");

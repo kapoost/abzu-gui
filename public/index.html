@@ -23,8 +23,8 @@
       <nav class="flex gap-1">
         <a data-role="jordan" data-step="1" class="role-link">Jordan · reviewer</a>
         <a data-role="sam" data-step="2" class="role-link">Sam · operator</a>
-        <a data-role="operator" data-step="3" class="role-link">Operator · publisher</a>
-        <a data-role="sponsor" data-step="4" class="role-link">Sponsor · read-only</a>
+        <a data-role="operator" data-step="3" class="role-link">Riley · publisher</a>
+        <a data-role="sponsor" data-step="4" class="role-link">Taylor · read-only</a>
       </nav>
       <div class="flex items-center gap-2">
         <span class="text-xs text-zinc-500" id="status-pill">—</span>
@@ -46,7 +46,7 @@
             AdCP reference implementation
           </div>
           <h1>Watch agents <span class="accent">negotiate</span> an ad deal — live.</h1>
-          <p class="text-sm mt-3 max-w-xl">An end-to-end <a href="https://adcontextprotocol.org" target="_blank" class="text-violet-400 hover:text-violet-300 underline decoration-violet-500/40 underline-offset-2">Ad Context Protocol</a> demo. Four roles, one buy, governance enforced, banner served. Click through Jordan → Sam → Operator → Sponsor.</p>
+          <p class="text-sm mt-3 max-w-xl">An end-to-end <a href="https://adcontextprotocol.org" target="_blank" class="text-violet-400 hover:text-violet-300 underline decoration-violet-500/40 underline-offset-2">Ad Context Protocol</a> demo. Four roles, one buy, governance enforced, banner served. Click through Jordan → Sam → Riley → Taylor.</p>
           <p class="text-xs mt-2 text-zinc-500">Open source. Repos:
             <a href="https://github.com/kapoost/abzu-orchestrator" target="_blank" class="text-violet-400 hover:text-violet-300 underline decoration-violet-500/40">abzu-orchestrator</a> ·
             <a href="https://github.com/kapoost/abzu-governance" target="_blank" class="text-violet-400 hover:text-violet-300 underline decoration-violet-500/40">abzu-governance</a> ·
@@ -287,23 +287,24 @@
             </div>
             <div id="creative-single" class="grid grid-cols-2 gap-3">
               <label class="text-sm">
-                <span class="block text-zinc-400 mb-1">Image URL <span class="text-zinc-500">(PNG/JPG/WEBP/GIF — leave empty for agent-crafted SVG)</span></span>
-                <input id="creative-image-url" name="creative_image_url" type="url" class="w-full border border-zinc-700 rounded px-2 py-1.5" placeholder="empty → seller renders a branded SVG for the placement" />
+                <span class="block text-zinc-400 mb-1">Image URL <span class="text-zinc-500">(PNG/JPG/WEBP/GIF)</span></span>
+                <input id="creative-image-url" name="creative_image_url" type="url" class="w-full border border-zinc-700 rounded px-2 py-1.5" placeholder="empty → seller-crafted SVG for the placement" />
                 <div id="creative-image-check" class="mt-1 text-xs text-zinc-500 min-h-[1em]"></div>
               </label>
               <label class="text-sm">
                 <span class="block text-zinc-400 mb-1">Click URL</span>
-                <input name="creative_click_url" type="url" class="w-full border border-zinc-700 rounded px-2 py-1.5" placeholder="https://example.com/landing" />
+                <input name="creative_click_url" type="url" class="w-full border border-zinc-700 rounded px-2 py-1.5" placeholder="empty → https://rocketscience.pl/" />
               </label>
               <label class="text-sm">
                 <span class="block text-zinc-400 mb-1">Alt text</span>
-                <input name="creative_alt_text" class="w-full border border-zinc-700 rounded px-2 py-1.5" placeholder="Acme dog food banner" />
+                <input name="creative_alt_text" class="w-full border border-zinc-700 rounded px-2 py-1.5" placeholder="empty → uses creative name" />
               </label>
               <label class="text-sm">
                 <span class="block text-zinc-400 mb-1">Creative name</span>
-                <input name="creative_name" class="w-full border border-zinc-700 rounded px-2 py-1.5" placeholder="acme-display-300x250-v1" />
+                <input name="creative_name" class="w-full border border-zinc-700 rounded px-2 py-1.5" placeholder="empty → abzu-<timestamp>" />
               </label>
             </div>
+            <div id="creative-defaults-hint" class="hidden text-xs rounded border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 text-amber-200/80"></div>
             <div id="creative-audience" class="hidden space-y-2">
               <div class="flex items-baseline justify-between">
                 <p class="text-xs text-zinc-500">One row per audience segment you checked in the Discover signals card, plus a fallback for users the seller can't match. Empty rows fall through to fallback at serve time.</p>
@@ -336,7 +337,7 @@
         <div id="delivery-outcome" class="text-sm"></div>
         <div id="delivery-error" class="hidden"></div>
       </div>
-      <div class="next-cta pt-2"><a href="?role=operator" class="next-link">Next: Operator approves the creative <span aria-hidden>→</span></a></div>
+      <div class="next-cta pt-2"><a href="?role=operator" class="next-link">Next: Riley approves the creative <span aria-hidden>→</span></a></div>
     </section>
 
     <!-- JORDAN -->
@@ -431,7 +432,7 @@
 
         <div id="conditions-queue-wrap" class="hidden space-y-2">
           <h3 class="text-sm font-semibold text-amber-800">Conditions queue</h3>
-          <p class="text-xs text-zinc-500">Checks where governance returned <code class="font-mono">verdict=conditions</code>. Operator must resubmit the buy with <code class="font-mono">accept_conditions=true</code> to proceed.</p>
+          <p class="text-xs text-zinc-500">Checks where governance returned <code class="font-mono">verdict=conditions</code>. Sam must resubmit the buy with <code class="font-mono">accept_conditions=true</code> to proceed.</p>
           <div id="conditions-queue" class="space-y-2"></div>
         </div>
 
@@ -467,7 +468,7 @@
         <span class="step" data-step="audit"><span class="opacity-60">4</span> Audit</span>
       </div>
       <div>
-        <h1 class="text-lg font-semibold text-zinc-50">Operator · publisher</h1>
+        <h1 class="text-lg font-semibold text-zinc-50">Riley · publisher operator</h1>
         <p class="persona-desc"><em>Publisher-side gate.</em> Reviews creatives incoming from buyers. Approve to unlock <code class="font-mono text-xs text-zinc-300">/live/result-slot</code> serving on <a href="https://purrsonality.rocketscience.pl" target="_blank" class="text-violet-400 hover:text-violet-300">purrsonality.rocketscience.pl</a>.</p>
       </div>
 
@@ -501,7 +502,7 @@
           </tbody>
         </table>
       </div>
-      <div class="next-cta pt-2"><a href="?role=sponsor" class="next-link">Next: Sponsor reads the audit ledger <span aria-hidden>→</span></a></div>
+      <div class="next-cta pt-2"><a href="?role=sponsor" class="next-link">Next: Taylor reads the audit ledger <span aria-hidden>→</span></a></div>
     </section>
 
     <!-- SPONSOR -->
@@ -517,7 +518,7 @@
         <span class="step" data-step="audit"><span class="opacity-60">4</span> Audit</span>
       </div>
       <div>
-        <h1 class="text-lg font-semibold text-zinc-50">Sponsor · audit viewer</h1>
+        <h1 class="text-lg font-semibold text-zinc-50">Taylor · audit viewer</h1>
         <p class="persona-desc"><em>Read-only oversight.</em> Reads the governance ledger per plan: budget burndown, checks history, outcome events. The system of record.</p>
       </div>
 

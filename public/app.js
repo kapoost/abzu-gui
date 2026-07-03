@@ -491,6 +491,17 @@ function bindSam() {
     brandDomainInput.addEventListener("change", () => refreshBrandJsonStatus(brandDomainInput.value));
     refreshBrandJsonStatus(brandDomainInput.value);
   }
+  // Path A restoration — replay cached Sam state so the buyer doesn't lose
+  // Discover / selection / generated banners on a refresh. Runs once per
+  // Sam view init; a Reset demo click still clears everything via
+  // samStateClear on the reset flow.
+  restoreSamStateFromLocalStorage();
+  // Save the brief on blur — the raw text is what feeds every downstream
+  // step (Discover signals, Generate creatives, brand.json resolution).
+  const briefEl = document.querySelector('#brief-form [name="brief"]');
+  if (briefEl) {
+    briefEl.addEventListener("blur", () => samStateWrite(SAM_STATE_KEYS.brief, briefEl.value));
+  }
 
   $("#buy-form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -683,6 +694,37 @@ async function executeSingleBuy(fd, override) {
     refreshKnownPlans();
     const mb = buyRes.body?.media_buy?.media_buy_id;
     if (mb) patchDemoState({ media_buy_id: mb });
+    // Path C stub — governance ledger snapshot of the discovery context
+    // that fed this buy: brief, discovered signals, selection, generated
+    // banners. Fire-and-forget so a governance outage never blocks the
+    // buy path. Endpoint expects a schema addition (audit event); we send
+    // a well-known shape today and the governance side will pick it up
+    // when it lands. Comment-only until governance/audit accepts arbitrary
+    // ext events; no-op on 404 for now.
+    // TODO(#creative-audit): remove the guard once governance ships a
+    // /governance/discovery-context endpoint. Discussed in the plan-scoped
+    // storage narada (Path B).
+    const briefEl = document.querySelector('#brief-form [name="brief"]');
+    const briefSnap = briefEl?.value?.trim() ?? "";
+    const disc = samStateRead(SAM_STATE_KEYS.discovery);
+    const selection = samStateRead(SAM_STATE_KEYS.selection);
+    const generated = samStateRead(SAM_STATE_KEYS.generated);
+    if (briefSnap || disc || selection || generated) {
+      const snapshot = {
+        plan_id: String(fd.get("plan_id") ?? ""),
+        media_buy_id: mb ?? null,
+        brief: briefSnap,
+        discovery: disc,
+        selection: Array.isArray(selection) ? selection : [],
+        generated_variants: Array.isArray(generated) ? generated : [],
+        submitted_at: new Date().toISOString(),
+      };
+      void abzu("/governance/discovery-context", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(snapshot),
+      }).catch(() => {});
+    }
   }
 
   let syncRes = null;
@@ -987,6 +1029,158 @@ function sellerCardHtml(s, i) {
 let currentProposals = [];
 let multiBuyQueue = null;
 
+/* Persistent Sam-view state — survives refresh + hard reload + browser
+ * restart. Written on every meaningful click; read once on Sam view init.
+ * Fits under Storage.localStorage's typical 5–10MB per origin, and each
+ * value is under ~50KB (signals responses top out around ~15KB, variant
+ * URLs are just strings).
+ *
+ * Namespaced with sam.* so a future multi-view state layer can co-exist.
+ * Global (not per plan_id) for MVP — Sam demo runs one plan at a time.
+ * See README roadmap: cross-device restore via governance ledger is
+ * planned as Path B; this is Path A + a Path C stub on Execute buy. */
+const SAM_STATE_KEYS = {
+  brief: "sam.brief",
+  discovery: "sam.discovery",          // full signals[] + diagnostics from last /discovery/signals
+  selection: "sam.discovery_selection", // array of signal_ids checked
+  generated: "sam.generated_variants", // array of variant records populated into the audience grid
+};
+
+function samStateRead(key) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+function samStateWrite(key, value) {
+  try {
+    if (value === null || value === undefined) {
+      localStorage.removeItem(key);
+    } else {
+      localStorage.setItem(key, JSON.stringify(value));
+    }
+  } catch {
+    /* Quota exceeded / private mode — silently drop; state is a cache,
+     * not a source of truth. */
+  }
+}
+function samStateClear() {
+  for (const k of Object.values(SAM_STATE_KEYS)) {
+    try { localStorage.removeItem(k); } catch {}
+  }
+}
+/* Path A restoration on Sam view init — no server round-trip, no plan_id
+ * required. Reads every SAM_STATE_KEYS entry, feeds discovery-related
+ * state back into the in-memory modules (selectedAudienceSignals,
+ * discoveryHasRun, lastDiscoveredSignals), and repaints the two visible
+ * panels (Discover signals card + audience creative grid) so the buyer
+ * lands on the same view they left. */
+function restoreSamStateFromLocalStorage() {
+  const briefEl = document.querySelector('#brief-form [name="brief"]');
+  const savedBrief = samStateRead(SAM_STATE_KEYS.brief);
+  if (briefEl && typeof savedBrief === "string" && savedBrief.length > 0 && !briefEl.value.trim()) {
+    briefEl.value = savedBrief;
+  }
+  const disc = samStateRead(SAM_STATE_KEYS.discovery);
+  const selection = samStateRead(SAM_STATE_KEYS.selection);
+  if (disc && Array.isArray(disc.signals)) {
+    discoveryHasRun = true;
+    lastDiscoveredSignals = disc.signals.map((s) => ({
+      signal_id: String(s.signal_id ?? ""),
+      name: String(s.name || s.signal_id || ""),
+      agent_id: String(s.agent_id ?? ""),
+    })).filter((s) => s.signal_id);
+    if (Array.isArray(selection)) {
+      const known = new Set(lastDiscoveredSignals.map((s) => s.signal_id));
+      selectedAudienceSignals = selection
+        .filter((id) => known.has(id))
+        .map((id) => {
+          const hit = lastDiscoveredSignals.find((s) => s.signal_id === id);
+          return { signal_id: id, ...(hit?.name && { name: hit.name }) };
+        });
+    }
+    // Repaint the signals card. Same renderer path as fresh /discovery/signals
+    // — synthesizes a fake response object from what we cached so status +
+    // diagnostics + result cards all reappear with the checkboxes ticked.
+    replayDiscoveryUI(disc);
+    // Grid + defaults hint also need a refresh so the audience mode has
+    // rows waiting for the buyer.
+    if ($("#creative-audience-grid")) renderAudienceCreativeGrid();
+  }
+}
+
+/* Renders the Discover signals status + diagnostics + result cards from a
+ * cached payload. Mirrors the DOM writes inside discoverSignals(), split
+ * out so both the fresh-fetch and restore paths share the same layout. */
+function replayDiscoveryUI(cached) {
+  const statusEl = $("#signals-status");
+  const diagEl = $("#signals-diagnostics");
+  const resultsEl = $("#signals-results");
+  const signals = Array.isArray(cached.signals) ? cached.signals : [];
+  const d = cached.diagnostics ?? {};
+  if (statusEl) {
+    statusEl.textContent = `${signals.length} signal${signals.length === 1 ? "" : "s"} · ${d.agents_responded ?? 0}/${d.agents_queried ?? 0} agents responded · restored from previous session`;
+  }
+  if (diagEl && Array.isArray(d.agents)) {
+    diagEl.classList.remove("hidden");
+    diagEl.innerHTML = d.agents.map((a) => {
+      const ok = a.ok === true;
+      const cls = ok ? "text-emerald-400" : "text-rose-400";
+      const label = ok ? `${a.signals_returned ?? 0} returned` : classifySignalsFailure(a);
+      const tooltip = ok ? "" : ` title="${esc(a.error ?? (a.validation_issues || []).join(" | "))}"`;
+      return `<span${tooltip} class="text-xs px-2 py-1 rounded border border-zinc-700 bg-zinc-900/40"><span class="font-mono text-zinc-300 mr-1">${esc(a.agent_id)}</span><span class="${cls} font-semibold">${esc(label)}</span></span>`;
+    }).join("");
+  }
+  if (resultsEl && signals.length > 0) {
+    resultsEl.classList.remove("hidden");
+    const selectedIds = new Set(selectedAudienceSignals.map((s) => s.signal_id));
+    resultsEl.innerHTML = signals.map((s) => {
+      const signalId = String(s.signal_id ?? "");
+      const name = String(s.name || s.signal_id || "");
+      const coverage = typeof s.coverage_percentage === "number"
+        ? `<span class="text-xs text-emerald-300">${s.coverage_percentage.toFixed(1)}% coverage</span>`
+        : "";
+      const provider = s.data_provider ? `<span class="text-xs text-zinc-500">${esc(s.data_provider)}</span>` : "";
+      const type = s.signal_type ? `<span class="text-[10px] uppercase tracking-wider text-violet-300">${esc(s.signal_type)}</span>` : "";
+      const checked = selectedIds.has(signalId) ? " checked" : "";
+      return `<div class="border border-zinc-800 rounded p-3 space-y-1">
+        <div class="flex items-center justify-between gap-3">
+          <div class="min-w-0 flex items-start gap-3">
+            <label class="pt-1 cursor-pointer" title="Add this audience segment to the per-audience creative grid">
+              <input type="checkbox" data-signal-select data-signal-id="${esc(signalId)}" data-signal-name="${esc(name)}"${checked} />
+            </label>
+            <div>
+              <div class="flex items-center gap-2 flex-wrap">
+                <span class="font-mono text-xs text-zinc-500">${esc(s.agent_id)}</span>
+                <span class="font-semibold text-zinc-100">${esc(name)}</span>
+                ${type}
+              </div>
+              ${s.description ? `<div class="text-xs text-zinc-400 mt-0.5">${esc(s.description)}</div>` : ""}
+            </div>
+          </div>
+          <div class="text-right whitespace-nowrap flex flex-col gap-0.5 items-end">${coverage}${provider}</div>
+        </div>
+      </div>`;
+    }).join("");
+  }
+}
+
+/* Best-effort variant URL lookup for the audience grid populate. Keyed by
+ * signal_id — the same id we send to the creative agent and get back on
+ * variant.audience_slug / audience_tag. */
+function samStateGeneratedMap() {
+  const arr = samStateRead(SAM_STATE_KEYS.generated);
+  const m = new Map();
+  if (!Array.isArray(arr)) return m;
+  for (const v of arr) {
+    const id = String(v?.audience_tag ?? v?.audience_slug ?? "");
+    if (id) m.set(id, v);
+  }
+  return m;
+}
+
 /* Hardcoded cat-persona defaults for the audience grid when the buyer has
  * never opened Discover signals in this session. Once they run Discover +
  * check any signal cards, selectedAudienceSignals takes over and the grid
@@ -1064,6 +1258,11 @@ async function discoverSignals() {
   // that vanished from the catalog probably shouldn't ship an ad.
   const stillPresent = new Set(lastDiscoveredSignals.map((s) => s.signal_id));
   selectedAudienceSignals = selectedAudienceSignals.filter((s) => stillPresent.has(s.signal_id));
+  // Cache the raw response so a refresh restores the diagnostics chips +
+  // signal cards without re-running Discover. Selection carries its own
+  // key so the checkbox render can reconstruct the checked state.
+  samStateWrite(SAM_STATE_KEYS.discovery, { signals, diagnostics: d });
+  samStateWrite(SAM_STATE_KEYS.selection, selectedAudienceSignals.map((s) => s.signal_id));
   if ($("#creative-audience-grid")) renderAudienceCreativeGrid();
   if (statusEl) statusEl.textContent = `${signals.length} signal${signals.length === 1 ? "" : "s"} · ${d.agents_responded ?? 0}/${d.agents_queried ?? 0} agents responded · ${elapsed}s`;
   if (diagEl) {
@@ -1127,6 +1326,7 @@ function onSignalSelectionChange(evt) {
     signal_id: el.dataset.signalId ?? "",
     name: el.dataset.signalName ?? (el.dataset.signalId ?? ""),
   })).filter((s) => s.signal_id);
+  samStateWrite(SAM_STATE_KEYS.selection, selectedAudienceSignals.map((s) => s.signal_id));
   renderAudienceCreativeGrid();
 }
 
@@ -1319,6 +1519,19 @@ function renderAudienceCreativeGrid() {
       </div>
     </div>`;
   }).join("");
+  // Re-apply cached generated variants after a re-render — so a Sam view
+  // refresh restores the URLs onto their rows even before the buyer
+  // touches Generate creatives again. Only fills empty inputs to avoid
+  // clobbering something the buyer typed manually since the last save.
+  const cachedGen = samStateGeneratedMap();
+  if (cachedGen.size > 0) {
+    for (const [signalId, v] of cachedGen) {
+      const img = grid.querySelector(`input[data-audience-field="image_url"][data-audience-slug="${cssEscape(signalId)}"]`);
+      if (img && !img.value && v?.image_url) img.value = String(v.image_url);
+      const alt = grid.querySelector(`input[data-audience-field="alt_text"][data-audience-slug="${cssEscape(signalId)}"]`);
+      if (alt && !alt.value && v?.alt_text) alt.value = String(v.alt_text);
+    }
+  }
 }
 
 /* Per-audience routing only *serves* through /live/result-slot?audience=<slug>,
@@ -1542,6 +1755,7 @@ async function generateCreativesForAudienceRows() {
     return;
   }
   const variants = Array.isArray(finalRec.variants) ? finalRec.variants : [];
+  if (variants.length > 0) samStateWrite(SAM_STATE_KEYS.generated, variants);
   const filled = applyGeneratedVariantsToGrid(variants);
   const el = ((Date.now() - started) / 1000).toFixed(1);
   if (status) {

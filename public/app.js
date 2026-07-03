@@ -476,6 +476,21 @@ function bindSam() {
     buyForm.addEventListener("change", updateCreativeDefaultsHint);
   }
   updateCreativeDefaultsHint();
+  // Brand.json readiness indicator — debounced on brand_domain edits and
+  // fired once on panel open. Buyer sees at a glance whether the
+  // generative pipeline will pull real brand context or fall back to
+  // Claude picking colors from scratch.
+  const brandDomainInput = buyForm?.querySelector('input[name="brand_domain"]');
+  if (brandDomainInput) {
+    let debounce = 0;
+    const trigger = () => {
+      clearTimeout(debounce);
+      debounce = setTimeout(() => refreshBrandJsonStatus(brandDomainInput.value), 400);
+    };
+    brandDomainInput.addEventListener("input", trigger);
+    brandDomainInput.addEventListener("change", () => refreshBrandJsonStatus(brandDomainInput.value));
+    refreshBrandJsonStatus(brandDomainInput.value);
+  }
 
   $("#buy-form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -1335,6 +1350,58 @@ function updateCreativeModeVisibility() {
   const audience = document.getElementById("creative-audience");
   if (single) single.classList.toggle("hidden", mode !== "single");
   if (audience) audience.classList.toggle("hidden", mode !== "audience");
+}
+
+/* Brand.json presence + completeness indicator. Called from a debounced
+ * listener on the Brand domain input; hits abzu /brand-resolve (which
+ * server-side fetches the /.well-known/brand.json off the target origin)
+ * and reports what the creative generator will actually see. Rated
+ * traffic-light style: green = ready for generation, amber = usable but
+ * missing colors/logo/voice, red = no brand.json at all (generator will
+ * use fallback palette). Only affects the display badge — no gate.
+ */
+let brandJsonProbeSeq = 0;
+async function refreshBrandJsonStatus(rawDomain) {
+  const el = document.getElementById("brand-json-status");
+  if (!el) return;
+  const domain = String(rawDomain ?? "").trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+  if (!domain || !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(domain)) {
+    el.textContent = "";
+    el.className = "mt-1 text-xs min-h-[1em]";
+    return;
+  }
+  const my = ++brandJsonProbeSeq;
+  el.textContent = "checking brand.json…";
+  el.className = "mt-1 text-xs text-zinc-500 min-h-[1em]";
+  const r = await abzu(`/brand-resolve?domain=${encodeURIComponent(domain)}`);
+  if (my !== brandJsonProbeSeq) return;
+  if (!r.ok || !r.body?.found) {
+    el.textContent = `no brand.json at ${domain}/.well-known/brand.json — generator will pick a fallback palette`;
+    el.className = "mt-1 text-xs text-amber-300/80 min-h-[1em]";
+    return;
+  }
+  const b = r.body ?? {};
+  const has = {
+    name: typeof b.name === "string" && b.name.length > 0,
+    tagline: typeof b.tagline === "string" && b.tagline.length > 0,
+    colors: b.colors && typeof b.colors === "object" && Object.values(b.colors).some((v) => typeof v === "string" && /^#[0-9a-fA-F]{6}$/.test(v)),
+    voice: typeof b.voice === "string" && b.voice.length > 0,
+    logo: typeof b.logo_url === "string" && b.logo_url.length > 0,
+  };
+  const missing = ["name", "tagline", "colors", "voice", "logo"].filter((k) => !has[k]);
+  const parts = [`✓ brand.json found`, has.name ? esc(b.name) : "unnamed"];
+  if (has.tagline) parts.push(`“${esc(String(b.tagline).slice(0, 60))}”`);
+  const line = parts.join(" · ");
+  if (missing.length === 0) {
+    el.textContent = `${line} · full palette + voice + logo — best generation quality`;
+    el.className = "mt-1 text-xs text-emerald-400 min-h-[1em]";
+  } else if (has.name && has.colors) {
+    el.textContent = `${line} · missing: ${missing.join(", ")}`;
+    el.className = "mt-1 text-xs text-emerald-300/80 min-h-[1em]";
+  } else {
+    el.textContent = `${line} · missing: ${missing.join(", ")} — generator may fall back to defaults for those fields`;
+    el.className = "mt-1 text-xs text-amber-300/85 min-h-[1em]";
+  }
 }
 
 /* "Generate creatives" — fires the creative-generative agent through the

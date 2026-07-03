@@ -2365,10 +2365,18 @@ async function loadOperatorCreatives() {
       : row.status === "rejected" ? "text-rose-700"
       : row.status === "pending_review" ? "text-amber-700" : "text-zinc-400";
     const submitted = new Date(row.submitted_at).toLocaleString();
+    // Approved creatives still get a Withdraw button — Riley may need to
+    // pull a live creative that turned out broken (asset 404, off-brand
+    // copy, wrong audience tag) without waiting for the next review
+    // cycle. Backend accepts approved → rejected via the same /reject
+    // endpoint, so the wire is identical to the pending-queue reject.
     const action = row.status === "pending_review"
       ? `<button class="op-approve px-2 py-1 rounded bg-emerald-600 text-white text-xs hover:bg-emerald-500" data-id="${esc(row.creative_id)}">Approve</button>
          <button class="op-reject px-2 py-1 rounded bg-transparent text-rose-700 border border-rose-300 text-xs hover:bg-rose-50 ml-1" data-id="${esc(row.creative_id)}">Reject</button>`
-      : `<span class="text-zinc-500 text-xs">${row.reviewed_at ? new Date(row.reviewed_at).toLocaleString() : "—"}</span>`;
+      : row.status === "approved"
+        ? `<div class="flex items-center gap-2"><span class="text-zinc-500 text-xs">${row.reviewed_at ? new Date(row.reviewed_at).toLocaleString() : "—"}</span>
+           <button class="op-reject px-2 py-1 rounded bg-transparent text-rose-700 border border-rose-300 text-xs hover:bg-rose-50" data-id="${esc(row.creative_id)}" title="Pull this creative from the live rotation">Withdraw</button></div>`
+        : `<span class="text-zinc-500 text-xs">${row.reviewed_at ? new Date(row.reviewed_at).toLocaleString() : "—"}</span>`;
     return `<tr class="border-b border-zinc-800 align-middle">
       <td class="px-2 py-2">${thumb}</td>
       <td class="px-2 py-2 font-mono text-xs">${esc(row.creative_id)}</td>

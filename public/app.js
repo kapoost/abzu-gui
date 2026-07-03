@@ -2399,6 +2399,11 @@ function boot() {
     try { localStorage.clear(); } catch {}
     window.location.href = "/?role=jordan";
   });
+  // Warmup on page load — fires the abzu /warmup fan-out so every
+  // downstream Fly machine gets a wake ping before the buyer clicks
+  // Discover / Generate / Execute. Fire-and-forget; response discarded.
+  // Runs once per view activation, silently.
+  void abzu("/warmup", { method: "POST" }).catch(() => {});
   activateRole(role);
   updateBreadcrumb();
   applyPlanInheritsToBrief();

@@ -465,6 +465,7 @@ function bindSam() {
     r.addEventListener("change", updateCreativeModeVisibility);
   }
   $("#creative-audience-fanout")?.addEventListener("click", fanoutAudienceFirstRow);
+  $("#creative-generate")?.addEventListener("click", generateCreativesForAudienceRows);
   $("#signals-results")?.addEventListener("change", onSignalSelectionChange);
   // Live update of the "empty → default X" hint. Same handler covers
   // single-mode fields and per-audience-mode grid inputs (delegated on
@@ -1334,6 +1335,199 @@ function updateCreativeModeVisibility() {
   const audience = document.getElementById("creative-audience");
   if (single) single.classList.toggle("hidden", mode !== "single");
   if (audience) audience.classList.toggle("hidden", mode !== "audience");
+}
+
+/* "Generate creatives" — fires the creative-generative agent through the
+ * abzu proxy, polls the task until every requested variant lands, and
+ * writes each variant's opaque image_url straight into the matching
+ * audience-grid row. The buyer never has to touch a file uploader; they
+ * click Discover signals → check the segments they want → click Generate,
+ * and the grid populates.
+ *
+ * Auth: the shared demo instance gates generation behind an
+ * X-Creative-Trust-Key. We stash it in localStorage under
+ * "creative_trust_key" — first click prompts once, subsequent calls send
+ * silently. A caller who wants to rotate the key wipes localStorage. */
+const CREATIVE_TRUST_KEY_STORAGE = "creative_trust_key";
+
+function readTrustKey() {
+  try { return localStorage.getItem(CREATIVE_TRUST_KEY_STORAGE) ?? ""; } catch { return ""; }
+}
+function saveTrustKey(v) {
+  try { localStorage.setItem(CREATIVE_TRUST_KEY_STORAGE, v); } catch {}
+}
+function promptForTrustKey() {
+  const stored = readTrustKey();
+  if (stored) return stored;
+  const entered = window.prompt(
+    "Creative generation is invite-only. Paste your trust key to unlock the button — it stays in your browser (localStorage).",
+    "",
+  );
+  const trimmed = String(entered ?? "").trim();
+  if (!trimmed) return "";
+  saveTrustKey(trimmed);
+  return trimmed;
+}
+
+/* Collect the audience segments currently rendered in the grid, skipping
+ * the fallback marker. Each becomes one requested variant per format the
+ * caller picked. */
+function collectAudienceGridAudiences() {
+  const grid = document.getElementById("creative-audience-grid");
+  if (!grid) return [];
+  const seen = new Map();
+  for (const el of grid.querySelectorAll("input[data-audience-slug]")) {
+    const slug = el.dataset.audienceSlug;
+    if (!slug || slug === "__fallback") continue;
+    if (seen.has(slug)) continue;
+    // Best-effort — look up name/description from the last-known signals
+    // response so the composer gets a rich prompt. Falls back to the
+    // slug itself when we haven't run Discover in this session.
+    const hit = Array.isArray(lastDiscoveredSignals)
+      ? lastDiscoveredSignals.find((s) => s.signal_id === slug)
+      : null;
+    seen.set(slug, {
+      signal_id: slug,
+      ...(hit?.name && { name: hit.name }),
+      ...(hit?.agent_id === "purrsonality-signals" && slug.startsWith("purrsonality.rocketscience.pl/purr_persona_")
+        ? { description: "Mischievous / playful / calm / dominant / high-energy cat person — persona from Purrsonality quiz" }
+        : {}),
+    });
+  }
+  return [...seen.values()];
+}
+
+async function generateCreativesForAudienceRows() {
+  const btn = $("#creative-generate");
+  const status = $("#creative-generate-status");
+  const brief = String($("#brief-form [name=\"brief\"]")?.value ?? "").trim();
+  const brandDomain = String($("#buy-form [name=\"brand_domain\"]")?.value ?? "").trim();
+  if (!brief) {
+    if (status) {
+      status.classList.remove("hidden");
+      status.textContent = "Write the brief first — it seeds every generated variant.";
+    }
+    return;
+  }
+  if (!brandDomain) {
+    if (status) {
+      status.classList.remove("hidden");
+      status.textContent = "Brand domain must be set — brand.json colors + voice drive the composer.";
+    }
+    return;
+  }
+  const audiences = collectAudienceGridAudiences();
+  if (audiences.length === 0) {
+    if (status) {
+      status.classList.remove("hidden");
+      status.textContent = "Check at least one signal in the Discover signals card first — that's what tells the agent what to generate.";
+    }
+    return;
+  }
+  const trustKey = promptForTrustKey();
+  if (!trustKey) {
+    if (status) {
+      status.classList.remove("hidden");
+      status.textContent = "Trust key required to generate. Skip for now — you can still paste image URLs by hand.";
+    }
+    return;
+  }
+  // MVP: single format hardcoded at 300×250 — matches purr_result_card_v1
+  // and purr_landing_rectangle_v1. Multi-format lands with the modal
+  // expansion.
+  const formats = [{ format_id: "display_300x250", width: 300, height: 250 }];
+  const payload = { brief, brand: { domain: brandDomain }, formats, audiences, quality: "draft" };
+  if (btn) btn.disabled = true;
+  if (status) {
+    status.classList.remove("hidden");
+    status.textContent = `Ordering ${audiences.length} × ${formats.length} = ${audiences.length * formats.length} banner${audiences.length * formats.length === 1 ? "" : "s"}…`;
+  }
+  const started = Date.now();
+  const orderRes = await abzu("/creative/order", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-creative-trust-key": trustKey },
+    body: JSON.stringify(payload),
+  });
+  if (!orderRes.ok) {
+    if (btn) btn.disabled = false;
+    if (status) status.textContent = `Order failed — HTTP ${orderRes.status} · ${orderRes.body?.reason ?? orderRes.body?.error ?? orderRes.body?.message ?? "unknown"}`;
+    if (orderRes.status === 401 || orderRes.status === 403) {
+      try { localStorage.removeItem(CREATIVE_TRUST_KEY_STORAGE); } catch {}
+    }
+    return;
+  }
+  const taskId = orderRes.body?.task_id;
+  if (!taskId) {
+    if (btn) btn.disabled = false;
+    if (status) status.textContent = "Order accepted but the agent returned no task_id. Reload and try again.";
+    return;
+  }
+  const expected = Number(orderRes.body?.variants_expected ?? audiences.length * formats.length);
+  const finalRec = await pollCreativeTask(taskId, expected, (rec) => {
+    if (!status) return;
+    const got = Array.isArray(rec.variants) ? rec.variants.length : 0;
+    const el = ((Date.now() - started) / 1000).toFixed(1);
+    status.textContent = `${got}/${expected} banners ready · ${el}s · status ${rec.status}`;
+  });
+  if (btn) btn.disabled = false;
+  if (!finalRec) {
+    if (status) status.textContent = "Poll timed out — the task is still running. Refresh the page and try again.";
+    return;
+  }
+  const variants = Array.isArray(finalRec.variants) ? finalRec.variants : [];
+  const filled = applyGeneratedVariantsToGrid(variants);
+  const el = ((Date.now() - started) / 1000).toFixed(1);
+  if (status) {
+    if (variants.length === 0) {
+      status.textContent = `Task completed with 0 variants · ${el}s · ${(finalRec.errors ?? []).slice(0, 2).join(" | ") || "no errors reported"}`;
+    } else {
+      status.textContent = `${variants.length} banner${variants.length === 1 ? "" : "s"} generated · ${filled} audience row${filled === 1 ? "" : "s"} filled · ${el}s`;
+    }
+  }
+}
+
+async function pollCreativeTask(taskId, expected, onTick) {
+  const deadline = Date.now() + 90_000;
+  let last = null;
+  while (Date.now() < deadline) {
+    const r = await abzu(`/creative/status/${encodeURIComponent(taskId)}`);
+    if (!r.ok) return null;
+    last = r.body;
+    if (typeof onTick === "function") onTick(last);
+    const done = String(last?.status ?? "") === "completed" || String(last?.status ?? "") === "failed";
+    const enough = Array.isArray(last?.variants) && last.variants.length >= expected;
+    if (done || enough) return last;
+    await new Promise((res) => setTimeout(res, 2000));
+  }
+  return last;
+}
+
+/* Copy generated variant URLs onto the matching audience-grid rows in
+ * place. Returns the count of rows we filled so the status line can show
+ * "N audiences populated." */
+function applyGeneratedVariantsToGrid(variants) {
+  const grid = document.getElementById("creative-audience-grid");
+  if (!grid || !Array.isArray(variants)) return 0;
+  let filled = 0;
+  for (const v of variants) {
+    const slug = String(v?.audience_slug ?? v?.audience_tag ?? "");
+    if (!slug) continue;
+    const imageInput = grid.querySelector(`input[data-audience-field="image_url"][data-audience-slug="${cssEscape(slug)}"]`);
+    if (!imageInput) continue;
+    imageInput.value = String(v.image_url ?? "");
+    const altInput = grid.querySelector(`input[data-audience-field="alt_text"][data-audience-slug="${cssEscape(slug)}"]`);
+    if (altInput && !altInput.value && v.alt_text) altInput.value = String(v.alt_text);
+    const nameInput = grid.querySelector(`input[data-audience-field="name"][data-audience-slug="${cssEscape(slug)}"]`);
+    if (nameInput && !nameInput.value) nameInput.value = `abzu-generated-${Date.now().toString(36)}-${slug.slice(-8)}`;
+    filled += 1;
+  }
+  updateCreativeDefaultsHint();
+  return filled;
+}
+
+function cssEscape(s) {
+  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") return CSS.escape(s);
+  return String(s).replace(/["\\]/g, "\\$&");
 }
 
 /* "Fill from first row" — mirrors the first audience row's inputs into every

@@ -1806,6 +1806,38 @@ function applyGeneratedVariantsToGrid(variants) {
   return filled;
 }
 
+/* Renders the topbar health strip: one coloured dot per downstream
+ * agent + a self-dot for the abzu orchestrator. Colour ladder:
+ *   green   → responded ok and under 400ms (warm)
+ *   amber   → responded ok but slow (starting up / cold path)
+ *   rose    → probe failed or non-2xx (down or unreachable)
+ *   zinc    → probe skipped (agent not configured on abzu env)
+ * Tooltip on each dot spells out the agent id + latency ms + last-seen
+ * time so a hover reveals the details. Runs on init + on a 15s
+ * setInterval, and the fetch itself is bounded by abzu's 2.5s per-agent
+ * timeout inside /agents/status. */
+async function refreshAgentStatusStrip() {
+  const strip = document.getElementById("agent-status-strip");
+  if (!strip) return;
+  const r = await abzu("/agents/status");
+  if (!r.ok) {
+    strip.innerHTML = `<span title="abzu unreachable" class="w-2 h-2 rounded-full bg-rose-500"></span>`;
+    return;
+  }
+  const now = new Date().toLocaleTimeString();
+  const dots = [{ id: "abzu", ok: true, latency_ms: 0 }, ...(Array.isArray(r.body?.agents) ? r.body.agents : [])];
+  strip.innerHTML = dots.map((a) => {
+    const cls = !a.ok
+      ? "bg-rose-500"
+      : a.id === "abzu"
+        ? "bg-emerald-500"
+        : (typeof a.latency_ms === "number" && a.latency_ms < 400 ? "bg-emerald-500" : "bg-amber-400");
+    const latency = typeof a.latency_ms === "number" ? `${a.latency_ms}ms` : "—";
+    const label = a.ok ? `${a.id} · ${latency}` : `${a.id} · down${a.error ? " · " + a.error : ""}`;
+    return `<span title="${esc(label)} · updated ${esc(now)}" class="w-2 h-2 rounded-full ${cls}"></span>`;
+  }).join("");
+}
+
 function cssEscape(s) {
   if (typeof CSS !== "undefined" && typeof CSS.escape === "function") return CSS.escape(s);
   return String(s).replace(/["\\]/g, "\\$&");
@@ -2404,6 +2436,12 @@ function boot() {
   // Discover / Generate / Execute. Fire-and-forget; response discarded.
   // Runs once per view activation, silently.
   void abzu("/warmup", { method: "POST" }).catch(() => {});
+  // Live health strip in the topbar. Polls every 15s; slower than warmup
+  // to keep the request rate low, fast enough that a suspended agent
+  // shows up as amber within one flip-book frame after the buyer opens
+  // the page.
+  refreshAgentStatusStrip();
+  setInterval(refreshAgentStatusStrip, 15_000);
   activateRole(role);
   updateBreadcrumb();
   applyPlanInheritsToBrief();

@@ -1827,14 +1827,17 @@ async function refreshAgentStatusStrip() {
   const now = new Date().toLocaleTimeString();
   const dots = [{ id: "abzu", ok: true, latency_ms: 0 }, ...(Array.isArray(r.body?.agents) ? r.body.agents : [])];
   strip.innerHTML = dots.map((a) => {
-    const cls = !a.ok
-      ? "bg-rose-500"
+    const color = !a.ok
+      ? "#f43f5e"          // rose-500
       : a.id === "abzu"
-        ? "bg-emerald-500"
-        : (typeof a.latency_ms === "number" && a.latency_ms < 400 ? "bg-emerald-500" : "bg-amber-400");
+        ? "#10b981"        // emerald-500
+        : (typeof a.latency_ms === "number" && a.latency_ms < 400 ? "#10b981" : "#fbbf24"); // amber-400
     const latency = typeof a.latency_ms === "number" ? `${a.latency_ms}ms` : "—";
     const label = a.ok ? `${a.id} · ${latency}` : `${a.id} · down${a.error ? " · " + a.error : ""}`;
-    return `<span title="${esc(label)} · updated ${esc(now)}" class="w-2 h-2 rounded-full ${cls}"></span>`;
+    // Inline style is intentional — Tailwind JIT doesn't scan w-2/h-2/bg-*
+    // used only inside a JS template string, so classes silently drop from
+    // the bundle. Hex colours ship in the app.js bytes, always render.
+    return `<span title="${esc(label)} · updated ${esc(now)}" style="display:inline-block;width:8px;height:8px;border-radius:9999px;background:${color}"></span>`;
   }).join("");
 }
 

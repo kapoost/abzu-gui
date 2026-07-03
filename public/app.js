@@ -1720,7 +1720,7 @@ async function generateCreativesForAudienceRows() {
   if (btn) btn.disabled = true;
   if (status) {
     status.classList.remove("hidden");
-    status.textContent = `Ordering ${audiences.length} × ${formats.length} = ${audiences.length * formats.length} banner${audiences.length * formats.length === 1 ? "" : "s"}…`;
+    status.textContent = `Ren is rendering ${audiences.length} × ${formats.length} = ${audiences.length * formats.length} banner${audiences.length * formats.length === 1 ? "" : "s"}…`;
   }
   const started = Date.now();
   const orderRes = await abzu("/creative/order", {
@@ -1760,9 +1760,9 @@ async function generateCreativesForAudienceRows() {
   const el = ((Date.now() - started) / 1000).toFixed(1);
   if (status) {
     if (variants.length === 0) {
-      status.textContent = `Task completed with 0 variants · ${el}s · ${(finalRec.errors ?? []).slice(0, 2).join(" | ") || "no errors reported"}`;
+      status.textContent = `Ren returned 0 variants · ${el}s · ${(finalRec.errors ?? []).slice(0, 2).join(" | ") || "no errors reported"}`;
     } else {
-      status.textContent = `${variants.length} banner${variants.length === 1 ? "" : "s"} generated · ${filled} audience row${filled === 1 ? "" : "s"} filled · ${el}s`;
+      status.textContent = `Ren delivered ${variants.length} banner${variants.length === 1 ? "" : "s"} · ${filled} audience row${filled === 1 ? "" : "s"} filled · ${el}s`;
     }
   }
 }
@@ -1833,7 +1833,9 @@ async function refreshAgentStatusStrip() {
         ? "#10b981"        // emerald-500
         : (typeof a.latency_ms === "number" && a.latency_ms < 400 ? "#10b981" : "#fbbf24"); // amber-400
     const latency = typeof a.latency_ms === "number" ? `${a.latency_ms}ms` : "—";
-    const label = a.ok ? `${a.id} · ${latency}` : `${a.id} · down${a.error ? " · " + a.error : ""}`;
+    // Human-friendly display names — internal ids stay stable for API contracts.
+    const display = ({ abzu: "abzu", seller: "seller", signals: "signals", governance: "governance", creative: "Ren" })[a.id] ?? a.id;
+    const label = a.ok ? `${display} · ${latency}` : `${display} · down${a.error ? " · " + a.error : ""}`;
     // Inline style is intentional — Tailwind JIT doesn't scan w-2/h-2/bg-*
     // used only inside a JS template string, so classes silently drop from
     // the bundle. Hex colours ship in the app.js bytes, always render.

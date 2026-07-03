@@ -465,6 +465,7 @@ function bindSam() {
     r.addEventListener("change", updateCreativeModeVisibility);
   }
   $("#creative-audience-fanout")?.addEventListener("click", fanoutAudienceFirstRow);
+  $("#signals-results")?.addEventListener("change", onSignalSelectionChange);
 
   $("#buy-form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -636,7 +637,8 @@ async function executeSingleBuy(fd, override) {
       for (const [slug, fields] of bySlug) {
         // Empty row = skip this audience. Seller falls through to fallback
         // bucket (or a filled fallback row) — no agent-crafted SVG per
-        // audience because that would emit N identical SVGs.
+        // audience because that would emit N identical SVGs. Row's "slug"
+        // is actually the signal_id (or "__fallback" for the untagged row).
         const rawImg = (fields.image_url ?? "").trim();
         if (!rawImg) continue;
         creativeRows.push({
@@ -670,7 +672,14 @@ async function executeSingleBuy(fd, override) {
       // attribute impressions back to a plan without a separate plan_id
       // column on the seller's creatives table (startsWith match).
       const base = row.name_hint || `abzu-${Date.now()}`;
-      const slugSuffix = row.slug ? `__${row.slug}` : "";
+      // Suffix segment identifies the audience row inside the buy — signal
+      // ids can contain slashes and dots (e.g. purrsonality.rocketscience.pl/
+      // purr_persona_trickster), so squash to [a-z0-9_-] before splicing
+      // into the creative_id. Fallback rows contribute the literal "fallback".
+      const suffixCore = row.slug === "__fallback"
+        ? "fallback"
+        : (row.slug || "").toLowerCase().replace(/[^a-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "");
+      const slugSuffix = suffixCore ? `__${suffixCore}` : "";
       const creativeId = `${planIdForCreative}__${base}__${override.product_id}${slugSuffix}`.slice(0, 96);
       const image = {
         asset_type: "image",
@@ -683,9 +692,11 @@ async function executeSingleBuy(fd, override) {
       // carries the full signal id so the seller live-slot can route
       // /live/result-slot?audience=<slug> to the matching creative.
       // Fallback rows keep the tag empty so they serve the untagged
-      // impressions (no ?audience= query, or an unknown audience).
-      if (row.slug && row.slug !== "fallback") {
-        image.audience_tag = `purr_persona_${row.slug}`;
+      // impressions (no ?audience= query, or an unknown audience). Row's
+      // "slug" already holds the full signal_id straight from the picked
+      // signal, so it becomes the tag verbatim.
+      if (row.slug && row.slug !== "__fallback") {
+        image.audience_tag = row.slug;
       }
       return {
         creative_id: creativeId,
@@ -900,22 +911,32 @@ function sellerCardHtml(s, i) {
 let currentProposals = [];
 let multiBuyQueue = null;
 
-/* Hardcoded cat persona slugs — mirror of signals.purrsonality.rocketscience.pl
- * catalog. Used as a fallback when the buyer hasn't run Discover signals yet
- * so the per-audience creative grid still renders. When Discover signals runs,
- * discoveredAudienceSlugs overrides these with the live catalog. */
-const FALLBACK_AUDIENCE_SLUGS = ["angel", "hunter", "tornado", "trickster", "tyrant"];
-let discoveredAudienceSlugs = null;
+/* Hardcoded cat-persona defaults for the audience grid when the buyer has
+ * never opened Discover signals in this session. Once they run Discover +
+ * check any signal cards, selectedAudienceSignals takes over and the grid
+ * only shows their selection. Signal id form matches what the signals
+ * agent emits so the sync payload writes it verbatim into audience_tag. */
+const DEFAULT_AUDIENCE_SIGNALS = [
+  { signal_id: "purr_persona_angel", name: "angel" },
+  { signal_id: "purr_persona_hunter", name: "hunter" },
+  { signal_id: "purr_persona_tornado", name: "tornado" },
+  { signal_id: "purr_persona_trickster", name: "trickster" },
+  { signal_id: "purr_persona_tyrant", name: "tyrant" },
+];
+let discoveryHasRun = false;
+let selectedAudienceSignals = [];
+let lastDiscoveredSignals = [];
 
-/* Returns the current audience segment list — Discover signals results if the buyer
- * clicked through, otherwise the hardcoded fallback. Slug-only, no `purr_`
- * prefix — the buyer sees "angel" in the grid, the sync payload adds the
- * `purr_persona_` prefix for the seller-side tag. */
-function currentAudienceSlugs() {
-  if (Array.isArray(discoveredAudienceSlugs) && discoveredAudienceSlugs.length > 0) {
-    return discoveredAudienceSlugs;
-  }
-  return FALLBACK_AUDIENCE_SLUGS;
+/* Rows the audience grid should render, in order:
+ *   - selection non-empty → the buyer's picks
+ *   - buyer never ran Discover → hardcoded cat personas (so the demo works
+ *     without a Discover click)
+ *   - Discover ran but selection empty → empty list (fallback row still
+ *     renders in renderAudienceCreativeGrid) */
+function currentAudienceRows() {
+  if (selectedAudienceSignals.length > 0) return selectedAudienceSignals;
+  if (!discoveryHasRun) return DEFAULT_AUDIENCE_SIGNALS;
+  return [];
 }
 
 /* Audience-signals discovery — orchestrator fan-out over every configured
@@ -952,22 +973,22 @@ async function discoverSignals() {
   }
   const d = r.body?.diagnostics ?? {};
   const signals = Array.isArray(r.body?.signals) ? r.body.signals : [];
-  // Cache the cat persona subset — purrsonality-signals emits ids like
-  // "purrsonality.rocketscience.pl/purr_persona_trickster" (canonical form),
-  // "purr_persona_trickster" (raw), or the object form; extract the slug so
-  // the per-audience creative grid populates from the live catalog next time
-  // the buyer opens it.
-  const audienceSlugs = [];
-  for (const s of signals) {
-    if (s.agent_id !== "purrsonality-signals") continue;
-    const rawId = String(s.signal_id ?? "");
-    const m = rawId.match(/purr_persona_([a-z_-]+)/);
-    if (m && !audienceSlugs.includes(m[1])) audienceSlugs.push(m[1]);
-  }
-  if (audienceSlugs.length > 0) {
-    discoveredAudienceSlugs = audienceSlugs;
-    if ($("#creative-audience-grid")) renderAudienceCreativeGrid();
-  }
+  // Remember every signal we saw this session so the checkbox handler can
+  // resolve a signal_id back to its full record when the buyer toggles it.
+  // Also keep a canonical (id, name) form for the audience grid — the raw
+  // response has a mix of string and object signal_id shapes, so we
+  // normalize once here.
+  discoveryHasRun = true;
+  lastDiscoveredSignals = signals.map((s) => ({
+    signal_id: String(s.signal_id ?? ""),
+    name: String(s.name || s.signal_id || ""),
+    agent_id: String(s.agent_id ?? ""),
+  })).filter((s) => s.signal_id);
+  // Drop selections that no longer appear in the latest Discover — a signal
+  // that vanished from the catalog probably shouldn't ship an ad.
+  const stillPresent = new Set(lastDiscoveredSignals.map((s) => s.signal_id));
+  selectedAudienceSignals = selectedAudienceSignals.filter((s) => stillPresent.has(s.signal_id));
+  if ($("#creative-audience-grid")) renderAudienceCreativeGrid();
   if (statusEl) statusEl.textContent = `${signals.length} signal${signals.length === 1 ? "" : "s"} · ${d.agents_responded ?? 0}/${d.agents_queried ?? 0} agents responded · ${elapsed}s`;
   if (diagEl) {
     diagEl.classList.remove("hidden");
@@ -985,21 +1006,30 @@ async function discoverSignals() {
       resultsEl.innerHTML = `<div class="text-sm text-zinc-500">No signals returned. Auth or connectivity errors show up in the diagnostics row above.</div>`;
     } else {
       resultsEl.classList.remove("hidden");
+      const selectedIds = new Set(selectedAudienceSignals.map((s) => s.signal_id));
       resultsEl.innerHTML = signals.map((s) => {
+        const signalId = String(s.signal_id ?? "");
+        const name = String(s.name || s.signal_id || "");
         const coverage = typeof s.coverage_percentage === "number"
           ? `<span class="text-xs text-emerald-300">${s.coverage_percentage.toFixed(1)}% coverage</span>`
           : "";
         const provider = s.data_provider ? `<span class="text-xs text-zinc-500">${esc(s.data_provider)}</span>` : "";
         const type = s.signal_type ? `<span class="text-[10px] uppercase tracking-wider text-violet-300">${esc(s.signal_type)}</span>` : "";
+        const checked = selectedIds.has(signalId) ? " checked" : "";
         return `<div class="border border-zinc-800 rounded p-3 space-y-1">
           <div class="flex items-center justify-between gap-3">
-            <div class="min-w-0">
-              <div class="flex items-center gap-2 flex-wrap">
-                <span class="font-mono text-xs text-zinc-500">${esc(s.agent_id)}</span>
-                <span class="font-semibold text-zinc-100">${esc(s.name || s.signal_id)}</span>
-                ${type}
+            <div class="min-w-0 flex items-start gap-3">
+              <label class="pt-1 cursor-pointer" title="Add this audience segment to the per-audience creative grid">
+                <input type="checkbox" data-signal-select data-signal-id="${esc(signalId)}" data-signal-name="${esc(name)}"${checked} />
+              </label>
+              <div>
+                <div class="flex items-center gap-2 flex-wrap">
+                  <span class="font-mono text-xs text-zinc-500">${esc(s.agent_id)}</span>
+                  <span class="font-semibold text-zinc-100">${esc(name)}</span>
+                  ${type}
+                </div>
+                ${s.description ? `<div class="text-xs text-zinc-400 mt-0.5">${esc(s.description)}</div>` : ""}
               </div>
-              ${s.description ? `<div class="text-xs text-zinc-400 mt-0.5">${esc(s.description)}</div>` : ""}
             </div>
             <div class="text-right whitespace-nowrap flex flex-col gap-0.5 items-end">${coverage}${provider}</div>
           </div>
@@ -1007,6 +1037,21 @@ async function discoverSignals() {
       }).join("");
     }
   }
+}
+
+/* Delegated handler for signal-card checkboxes — rebuilds
+ * selectedAudienceSignals from the current DOM state and re-renders the
+ * audience grid so newly-checked signals get their own row + newly-
+ * unchecked signals drop out. */
+function onSignalSelectionChange(evt) {
+  const t = evt.target;
+  if (!(t instanceof HTMLInputElement) || !t.matches("[data-signal-select]")) return;
+  const checked = document.querySelectorAll("input[data-signal-select]:checked");
+  selectedAudienceSignals = [...checked].map((el) => ({
+    signal_id: el.dataset.signalId ?? "",
+    name: el.dataset.signalName ?? (el.dataset.signalId ?? ""),
+  })).filter((s) => s.signal_id);
+  renderAudienceCreativeGrid();
 }
 
 function classifySignalsFailure(a) {
@@ -1163,28 +1208,37 @@ function openBuyPanel(proposal) {
 function renderAudienceCreativeGrid() {
   const grid = document.getElementById("creative-audience-grid");
   if (!grid) return;
+  // Preserve typed inputs across re-renders, keyed by the row's signal_id
+  // (or the literal "__fallback" marker for the untagged row).
   const priorValues = new Map();
   for (const el of grid.querySelectorAll("input[data-audience-field]")) {
     const key = `${el.dataset.audienceSlug}__${el.dataset.audienceField}`;
     priorValues.set(key, el.value);
   }
-  const rows = [...currentAudienceSlugs(), "fallback"];
-  grid.innerHTML = rows.map((slug) => {
-    const isFallback = slug === "fallback";
-    const label = isFallback
+  const signalRows = currentAudienceRows();
+  const rows = [...signalRows.map((s) => ({ ...s, isFallback: false })), { signal_id: "__fallback", name: "fallback", isFallback: true }];
+  // Empty state — Discover ran, buyer hasn't picked a signal yet. Show a
+  // hint above the fallback row so it's clear WHY there are no audience
+  // rows even though Discover found some.
+  const hint = discoveryHasRun && signalRows.length === 0
+    ? `<div class="text-xs text-amber-300/80 border border-amber-500/30 bg-amber-500/5 rounded p-2">Pick one or more signals in the Discover signals card above — each checked signal gets its own row here.</div>`
+    : "";
+  grid.innerHTML = hint + rows.map((row) => {
+    const rowKey = row.isFallback ? "__fallback" : row.signal_id;
+    const nameHtml = row.isFallback
       ? `<span class="text-zinc-500 uppercase tracking-wider text-[10px]">fallback</span>`
-      : `<span class="text-violet-300 font-mono text-xs">${esc(slug)}</span>`;
-    const tag = isFallback
+      : `<span class="text-violet-300 font-semibold text-xs truncate block">${esc(row.name)}</span>`;
+    const tagHtml = row.isFallback
       ? `<span class="text-[10px] text-zinc-600">no tag</span>`
-      : `<span class="text-[10px] text-zinc-500 font-mono">purr_persona_${esc(slug)}</span>`;
-    const val = (field) => esc(priorValues.get(`${slug}__${field}`) ?? "");
-    return `<div class="grid grid-cols-[80px_1fr_1fr] gap-2 items-start p-2 rounded border border-zinc-800 bg-zinc-900/40">
-      <div class="text-xs pt-1.5 space-y-0.5">${label}<div>${tag}</div></div>
+      : `<span class="text-[10px] text-zinc-500 font-mono break-all">${esc(row.signal_id)}</span>`;
+    const val = (field) => esc(priorValues.get(`${rowKey}__${field}`) ?? "");
+    return `<div class="grid grid-cols-[160px_1fr_1fr] gap-2 items-start p-2 rounded border border-zinc-800 bg-zinc-900/40">
+      <div class="text-xs pt-1.5 space-y-0.5 min-w-0">${nameHtml}<div>${tagHtml}</div></div>
       <div class="grid grid-cols-2 gap-2 col-span-2">
-        <input type="url" placeholder="Image URL" data-audience-field="image_url" data-audience-slug="${esc(slug)}" value="${val("image_url")}" class="w-full border border-zinc-700 rounded px-2 py-1 text-xs" />
-        <input type="url" placeholder="Click URL" data-audience-field="click_url" data-audience-slug="${esc(slug)}" value="${val("click_url")}" class="w-full border border-zinc-700 rounded px-2 py-1 text-xs" />
-        <input placeholder="Alt text" data-audience-field="alt_text" data-audience-slug="${esc(slug)}" value="${val("alt_text")}" class="w-full border border-zinc-700 rounded px-2 py-1 text-xs" />
-        <input placeholder="Creative name" data-audience-field="name" data-audience-slug="${esc(slug)}" value="${val("name")}" class="w-full border border-zinc-700 rounded px-2 py-1 text-xs" />
+        <input type="url" placeholder="Image URL" data-audience-field="image_url" data-audience-slug="${esc(rowKey)}" value="${val("image_url")}" class="w-full border border-zinc-700 rounded px-2 py-1 text-xs" />
+        <input type="url" placeholder="Click URL" data-audience-field="click_url" data-audience-slug="${esc(rowKey)}" value="${val("click_url")}" class="w-full border border-zinc-700 rounded px-2 py-1 text-xs" />
+        <input placeholder="Alt text" data-audience-field="alt_text" data-audience-slug="${esc(rowKey)}" value="${val("alt_text")}" class="w-full border border-zinc-700 rounded px-2 py-1 text-xs" />
+        <input placeholder="Creative name" data-audience-field="name" data-audience-slug="${esc(rowKey)}" value="${val("name")}" class="w-full border border-zinc-700 rounded px-2 py-1 text-xs" />
       </div>
     </div>`;
   }).join("");

@@ -576,6 +576,25 @@ async function probeImageUrl(url) {
   }
 }
 
+/* Server-side companion probe: asks Abzu backend to fetch the URL with a
+ * bare fetch (no browser fingerprint) — the same shape the seller uses in
+ * /live/*-slot when inlining creative bytes. Hotlink-protected origins
+ * (lays.pl, most e-commerce CDNs) return 200 to the browser but 403 to a
+ * bare fetch; the browser probe alone can't tell. Returns null when the
+ * backend endpoint isn't reachable (dev, older backend) — caller should
+ * degrade to the browser-probe result. */
+async function probeImageUrlServerSide(url) {
+  try {
+    const r = await fetch(`${ABZU}/api/probe-image?url=${encodeURIComponent(url)}`, {
+      cache: "no-store",
+    });
+    if (!r.ok) return null;
+    return await r.json();
+  } catch {
+    return null;
+  }
+}
+
 function wireImageUrlCheck() {
   const input = $("#creative-image-url");
   const out = $("#creative-image-check");
@@ -591,15 +610,33 @@ function wireImageUrlCheck() {
     const my = ++seq;
     out.textContent = "checking…";
     out.className = "mt-1 text-xs text-zinc-500 min-h-[1em]";
-    const res = await probeImageUrl(url);
+    const [res, serverRes] = await Promise.all([
+      probeImageUrl(url),
+      probeImageUrlServerSide(url),
+    ]);
     if (my !== seq) return;
-    if (res.ok) {
-      out.textContent = `image ok · ${res.source}${res.contentType ? " · " + res.contentType : ""}`;
-      out.className = "mt-1 text-xs text-emerald-400 min-h-[1em]";
-    } else {
+    if (!res.ok) {
       out.textContent = `not an image · ${res.reason}`;
       out.className = "mt-1 text-xs text-rose-400 min-h-[1em]";
+      return;
     }
+    // Browser probe passed. Cross-check the server-side result: hotlink-
+    // protected origins (lays.pl et al.) return 200 to the browser HEAD
+    // but 403 to a bare fetch, so a "green" URL still silently disappears
+    // from seller rotation. Size overflow (> 1 MB) is another silent-drop
+    // path — the seller's inline budget rejects the bytes and the loop
+    // skips the creative. When the server disagrees, downgrade to a
+    // warning so the operator knows to swap the URL.
+    if (serverRes && !serverRes.ok) {
+      out.textContent = `⚠ ${serverRes.reason}`;
+      out.className = "mt-1 text-xs text-amber-400 min-h-[1em]";
+      return;
+    }
+    const sizeSuffix = serverRes?.sizeBytes
+      ? ` · ${(serverRes.sizeBytes / 1024).toFixed(0)} KB`
+      : "";
+    out.textContent = `image ok · ${res.source}${res.contentType ? " · " + res.contentType : ""}${sizeSuffix}`;
+    out.className = "mt-1 text-xs text-emerald-400 min-h-[1em]";
   });
 }
 

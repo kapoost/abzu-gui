@@ -123,6 +123,17 @@ function setLastPlanId(planId) {
 
 let knownPlansCache = [];
 
+// setInterval that skips ticks while the tab is hidden and does one
+// catch-up refresh when it comes back. Background tabs were the main
+// driver of abzu's Neon compute burn (three pollers × every open tab).
+function visibleInterval(fn, ms) {
+  const id = setInterval(() => { if (!document.hidden) fn(); }, ms);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) fn();
+  });
+  return id;
+}
+
 async function refreshKnownPlans() {
   const status = $("#plans-listing-status");
   const samStatus = $("#sam-plan-select-status");
@@ -2491,7 +2502,7 @@ function boot() {
   // shows up as amber within one flip-book frame after the buyer opens
   // the page.
   refreshAgentStatusStrip();
-  setInterval(refreshAgentStatusStrip, 15_000);
+  visibleInterval(refreshAgentStatusStrip, 15_000);
   activateRole(role);
   updateBreadcrumb();
   applyPlanInheritsToBrief();
@@ -2536,7 +2547,7 @@ function boot() {
   bindOperator();
   bindSponsor();
   refreshKnownPlans();
-  setInterval(refreshKnownPlans, 15000);
+  visibleInterval(refreshKnownPlans, 15000);
   $("#plans-listing-reload")?.addEventListener("click", refreshKnownPlans);
   $("#sam-plans-reload")?.addEventListener("click", refreshKnownPlans);
   $("#sam-plan-select")?.addEventListener("change", (e) => {
@@ -2568,7 +2579,7 @@ function boot() {
     for (const input of $$(".plan-input")) input.value = last;
   }
   probeAbzu();
-  setInterval(probeAbzu, 30000);
+  visibleInterval(probeAbzu, 30000);
 }
 
 document.addEventListener("DOMContentLoaded", boot);
